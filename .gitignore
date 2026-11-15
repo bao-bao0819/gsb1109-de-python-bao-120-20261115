@@ -1,0 +1,82 @@
+*.py[cod]
+
+# C extensions
+*.so
+
+# vim
+*~
+.*.swp
+
+# Packages
+.eggs
+*.egg
+*.egg-info
+dist
+build
+eggs
+parts
+bin
+var
+sdist
+develop-eggs
+.installed.cfg
+lib
+lib64
+
+# Installer logs
+pip-log.txt
+
+# Unit test / coverage reports
+.coverage
+.tox
+nosetests.xml
+cover
+.cache/
+htmlcov/
+
+# Translations
+*.mo
+
+# Mr Developer
+.mr.developer.cfg
+.project
+.pydevproject
+
+# Pycharm
+.idea
+venv
+
+# Complexity
+output/*.html
+output/*/index.html
+
+# Sphinx
+docs/_build
+/docs/doctrees/
+/docs/html/
+# API reference pages, regenerated from docs/conf.py on every build
+/docs/modules.rst
+/docs/mt940*.rst
+.aider*
+.env
+
+# uv (lockfile not committed for a library)
+uv.lock
+
+# Tool caches
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.pdm-build
+
+# Profiling / scratch artifacts
+*.lprof
+*.py.html
+
+# Local scratch / sample files (not part of the package)
+/test.py
+/test.csv
+/test.mt940
+/cov.txt
+/coverage_report.txt
+/*.swi.txt
