@@ -6,6 +6,12 @@
 """
 
 from .accessor import Accessor
+from .archive import (
+    ArchiveResult,
+    ArchivedOrder,
+    SegmentGroupRule,
+    archive_message,
+)
 from .containers import (
     Batch,
     Component,
@@ -55,6 +61,10 @@ __all__ = [
     "Component",
     "Factory",
     "Accessor",
+    "archive_message",
+    "SegmentGroupRule",
+    "ArchivedOrder",
+    "ArchiveResult",
     "ishl7",
     "isbatch",
     "isfile",

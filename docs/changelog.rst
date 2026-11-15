@@ -18,6 +18,11 @@ Changelog
   float value.
 * Use `socket.sendall` to flush the MLLP buffer. `python-hl7#41 <https://github.com/johnpaulett/python-hl7/issues/41>`_.
  Thanks `Feenes <https://github.com/feenes>`_!`
+* Added :py:func:`hl7.archive_message` and :py:class:`hl7.SegmentGroupRule` to
+  split a multi-order message into one standalone child message per order. Each
+  child receives the shared patient/visit/public prefix, a new message control
+  id and a reference to the mother message's location; unknown ``Z`` segments
+  are kept as unassigned rather than attached to the nearest order.
 
 
 0.4.5 - March 2022

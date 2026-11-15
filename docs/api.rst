@@ -29,7 +29,22 @@ python-hl7 API
 
 .. autofunction:: hl7.generate_message_control_id
 
+.. autofunction:: hl7.archive_message
+
 .. autofunction:: hl7.parse_datetime
+
+
+Multi-order Archiving
+---------------------
+
+.. autoclass:: hl7.SegmentGroupRule
+   :members:
+
+.. autoclass:: hl7.ArchivedOrder
+   :members:
+
+.. autoclass:: hl7.ArchiveResult
+   :members:
 
 
 Data Types
