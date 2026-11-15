@@ -348,6 +348,61 @@ for post in blog_posts:
     posts.append(md.convert(post))
 ```
 
+### Converting a Batch of Documents
+
+When many documents need to be converted with the same configuration, the
+[`convertBatch`][markdown.Markdown.convertBatch] method reuses a single
+`Markdown` instance while keeping each document isolated. It accepts a list of
+Markdown strings and returns a list of HTML strings in the same order:
+
+``` python
+md = markdown.Markdown()
+html_list = md.convertBatch([document_one, document_two])
+```
+
+Before each document the instance is reset automatically, so state built up by
+one document (including its link reference definitions) cannot leak into the
+next. Two documents may therefore define a reference with the same name — such
+as `ref` — and each link resolves against its own document's definition, no
+matter what order the documents are converted in. If converting a document
+raises an exception, the instance is reset before the exception propagates so
+that a failed document cannot contaminate the documents that follow.
+
+Pass `reset=False` to deliberately accumulate state across the batch instead:
+
+``` python
+html_list = md.convertBatch(documents, reset=False)
+```
+
+### Shared External Link References { #references }
+
+Reference definitions written inside a document are private to that document
+and are discarded on reset. External definitions that should be available to
+every document can instead be registered once as shared references, either
+through the `references` keyword or the
+[`registerSharedReferences`][markdown.Markdown.registerSharedReferences]
+method. Each value is a `(url, title)` tuple, with the title set to `None`
+when unused, and reference names are normalized (stripped and lowercased) just
+like definitions in a document:
+
+``` python
+md = markdown.Markdown(references={
+    'home': ('https://example.com/', 'Example Home'),
+})
+# or, after the instance exists:
+md.registerSharedReferences({'home': ('https://example.com/', 'Example Home')})
+```
+
+Shared references survive every reset and therefore apply to each document
+converted by the instance, including every document in a
+[`convertBatch`][markdown.Markdown.convertBatch] call. A document may still
+define its own reference with the same name; that document-private definition
+takes precedence for that document alone and is discarded by the next reset,
+leaving the shared definition untouched. Use
+[`clearSharedReferences`][markdown.Markdown.clearSharedReferences] to remove
+all registered shared references.
+
+
 The [`convertFile`][markdown.Markdown.convertFile] method accepts the same
 arguments as the `markdown.markdownFromFile` function. There is little
 benefit in accessing this method directly and it remains for backward

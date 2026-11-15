@@ -937,6 +937,124 @@ PLACE_MARKER= ~~~footnotes~~~
         self.assertRaises(yaml.YAMLError, parse_options, ['-c', self.tempfile])
 
 
+class TestBatchConversion(unittest.TestCase):
+    """ Tests of batch conversion and document-private versus shared references. """
+
+    doc_a = "[ref][ref] from A\n\n[ref]: http://a.example.com\n"
+    doc_b = "[ref][ref] from B\n\n[ref]: http://b.example.com\n"
+
+    def testBatchIsolation(self):
+        """ Documents sharing a reference name each use their own definition. """
+        md = markdown.Markdown()
+        forward = md.convertBatch([self.doc_a, self.doc_b])
+        reversed_ = markdown.Markdown().convertBatch([self.doc_b, self.doc_a])
+
+        self.assertIn('href="http://a.example.com"', forward[0])
+        self.assertIn('href="http://b.example.com"', forward[1])
+        self.assertIn('href="http://b.example.com"', reversed_[0])
+        self.assertIn('href="http://a.example.com"', reversed_[1])
+        # Each document's output is unchanged when the batch order is swapped.
+        self.assertEqual(forward[0], reversed_[1])
+        self.assertEqual(forward[1], reversed_[0])
+
+    def testBatchPreservesOrder(self):
+        """ Output order matches the order of the input documents. """
+        md = markdown.Markdown()
+        self.assertEqual(
+            md.convertBatch(['first', 'second', 'third']),
+            ['<p>first</p>', '<p>second</p>', '<p>third</p>']
+        )
+
+    def testSharedReferencesViaKeyword(self):
+        """ External references passed on initialization apply to every document. """
+        md = markdown.Markdown(
+            references={'shared': ('http://shared.example.com', 'Shared Title')}
+        )
+        outputs = md.convertBatch(['[link][shared]', '[shared][shared]'])
+        for output in outputs:
+            self.assertIn('href="http://shared.example.com"', output)
+            self.assertIn('title="Shared Title"', output)
+        self.assertEqual(
+            md.shared_references,
+            {'shared': ('http://shared.example.com', 'Shared Title')}
+        )
+
+    def testRegisterSharedReferences(self):
+        """ Shared references can be registered after the instance exists. """
+        md = markdown.Markdown()
+        md.registerSharedReferences({'ref': ('http://shared.example.com', None)})
+        output = md.reset().convert('[ref][ref]')
+        self.assertIn('href="http://shared.example.com"', output)
+        # A reset retains the shared reference.
+        output = md.reset().convert('[ref][ref]')
+        self.assertIn('href="http://shared.example.com"', output)
+
+    def testSharedReferenceNameNormalization(self):
+        """ Shared reference names are normalized like document definitions. """
+        md = markdown.Markdown(references={'  MiXeD ': ('http://x.example.com', None)})
+        self.assertIn('href="http://x.example.com"', md.convert('[mixed][mixed]'))
+
+    def testPrivateReferenceShadowsShared(self):
+        """ A document-private definition wins over a shared one and is then discarded. """
+        md = markdown.Markdown(references={'ref': ('http://shared.example.com', None)})
+        outputs = md.convertBatch([self.doc_a, '[ref][ref]\n'])
+        self.assertIn('href="http://a.example.com"', outputs[0])
+        self.assertIn('href="http://shared.example.com"', outputs[1])
+        self.assertEqual(md.references, {'ref': ('http://shared.example.com', None)})
+
+    def testRegisteringSharedDoesNotOverrideActivePrivateReference(self):
+        """ A shared reference registered mid-document cannot shadow an active private one. """
+        md = markdown.Markdown()
+        md.convert(self.doc_a)
+        md.registerSharedReferences({'ref': ('http://shared.example.com', None)})
+        self.assertEqual(md.references['ref'], ('http://a.example.com', None))
+        md.reset()
+        self.assertIn('href="http://shared.example.com"', md.convert('[ref][ref]'))
+
+    def testClearSharedReferences(self):
+        """ Clearing shared references leaves the next document without them. """
+        md = markdown.Markdown(references={'ref': ('http://shared.example.com', None)})
+        md.clearSharedReferences()
+        self.assertEqual(md.shared_references, {})
+        self.assertEqual(md.references, {})
+        self.assertEqual(md.convert('[ref][ref]\n'), '<p>[ref][ref]</p>')
+
+    def testFailedDocumentDoesNotContaminateNext(self):
+        """ A failing document is reset so the next document converts cleanly. """
+        class FailOncePreprocessor(markdown.preprocessors.Preprocessor):
+            def __init__(self, md):
+                super().__init__(md)
+                self.calls = 0
+
+            def run(self, lines):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError('boom')
+                return lines
+
+        class FailOnceExtension(markdown.extensions.Extension):
+            def extendMarkdown(self, md):
+                md.registerExtension(self)
+                md.preprocessors.register(FailOncePreprocessor(md), 'fail-once', 100)
+
+        md = markdown.Markdown(extensions=[FailOnceExtension()])
+        with self.assertRaises(RuntimeError):
+            md.convertBatch([self.doc_a])
+        # The failed document's private reference must not survive into the next run.
+        self.assertEqual(md.references, {})
+        output = md.convert(self.doc_b)
+        self.assertIn('href="http://b.example.com"', output)
+        self.assertNotIn('http://a.example.com', output)
+
+    def testBatchWithoutResetAccumulatesState(self):
+        """ `reset=False` deliberately retains state while preserving order. """
+        md = markdown.Markdown()
+        self.assertEqual(
+            md.convertBatch(['a', 'b'], reset=False),
+            ['<p>a</p>', '<p>b</p>']
+        )
+
+
 class TestEscapeAppend(unittest.TestCase):
     """ Tests escape character append. """
 

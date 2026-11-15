@@ -56,8 +56,14 @@ class Markdown:
             [`registerExtension`][markdown.Markdown.registerExtension] during setup.
         Markdown.doc_tag (str): Element used to wrap document. Default: `div`.
         Markdown.stripTopLevelTags (bool): Indicates whether the `doc_tag` should be removed. Default: 'True'.
-        Markdown.references (dict[str, tuple[str, str]]): A mapping of link references found in a parsed document
-             where the key is the reference name and the value is a tuple of the URL and title.
+        Markdown.references (dict[str, tuple[str, str]]): A mapping of link references found in the currently
+            parsed document where the key is the reference name and the value is a tuple of the URL and title.
+            References defined within a document are private to that document and are discarded by
+            [`Markdown.reset()`][markdown.Markdown.reset].
+        Markdown.shared_references (dict[str, tuple[str, str]]): A mapping of externally provided link
+            references authorized for use by every document parsed by this instance. Unlike document-private
+            references, these survive [`Markdown.reset()`][markdown.Markdown.reset]. A document-private
+            reference with the same name takes precedence for that document.
         Markdown.htmlStash (util.HtmlStash): The instance of the `HtmlStash` used by an instance of this class.
         Markdown.output_formats (dict[str, Callable[xml.etree.ElementTree.Element]]): A mapping of known output
              formats by name and their respective serializers. Each serializer must be a callable which accepts an
@@ -103,6 +109,11 @@ class Markdown:
                 * `xhtml`: Outputs XHTML style tags. Default.
                 * `html`: Outputs HTML style tags.
             tab_length (int): Length of tabs in the source. Default: `4`
+            references (Mapping[str, tuple[str, str | None]]): External link reference definitions shared by
+                every document. Each value is a `(url, title)` tuple, mirroring the format of the definitions
+                found in a document. The references are registered with
+                [`registerSharedReferences`][markdown.Markdown.registerSharedReferences] and are not
+                discarded between documents.
 
         """
 
@@ -124,11 +135,14 @@ class Markdown:
         self.build_parser()
 
         self.references: dict[str, tuple[str, str]] = {}
+        self.shared_references: dict[str, tuple[str, str]] = {}
         self.htmlStash: util.HtmlStash = util.HtmlStash()
         self.registerExtensions(extensions=kwargs.get('extensions', []),
                                 configs=kwargs.get('extension_configs', {}))
         self.set_output_format(kwargs.get('output_format', 'xhtml'))
         self.reset()
+        if kwargs.get('references'):
+            self.registerSharedReferences(kwargs['references'])
 
     def build_parser(self) -> Markdown:
         """
@@ -268,9 +282,14 @@ class Markdown:
 
         Called once upon creation of a class instance. Should be called manually between calls
         to [`Markdown.convert`][markdown.Markdown.convert].
+
+        Document-private state (including the link references defined within a document) is discarded,
+        while any external references registered through
+        [`registerSharedReferences`][markdown.Markdown.registerSharedReferences] are retained.
         """
         self.htmlStash.reset()
         self.references.clear()
+        self.references.update(self.shared_references)
 
         if self.delimiters is not None:
             self.delimiters.reset()
@@ -282,6 +301,81 @@ class Markdown:
                 extension.reset()
 
         return self
+
+    def registerSharedReferences(
+        self, references: Mapping[str, tuple[str, str | None]]
+    ) -> Markdown:
+        """
+        Register external link reference definitions authorized for use by every document.
+
+        Arguments:
+            references: A mapping of reference names to `(url, title)` tuples, mirroring the format of
+                the link reference definitions found within a document. The reference name is normalized
+                the same way document definitions are (surrounding whitespace stripped and lowercased).
+
+        Shared references survive [`Markdown.reset()`][markdown.Markdown.reset] and therefore remain
+        available to every document converted by the instance. A document may define its own reference
+        with the same name; the document-private definition takes precedence for that document alone and
+        is discarded by the next reset, leaving the shared definition untouched.
+        """
+        normalized = {
+            name.strip().lower(): value for name, value in references.items()
+        }
+        # References currently only known to the active document are private and
+        # must keep taking precedence over a newly registered shared definition.
+        private_only = set(self.references) - set(self.shared_references)
+        self.shared_references.update(normalized)
+        self.references.update({
+            key: value for key, value in normalized.items() if key not in private_only
+        })
+        return self
+
+    def clearSharedReferences(self) -> Markdown:
+        """
+        Remove all external link reference definitions registered with
+        [`registerSharedReferences`][markdown.Markdown.registerSharedReferences].
+
+        Document-private references belonging to the current document are left untouched.
+        """
+        for name in self.shared_references:
+            if self.references.get(name) == self.shared_references[name]:
+                del self.references[name]
+        self.shared_references.clear()
+        return self
+
+    def convertBatch(
+        self, sources: Sequence[str], reset: bool = True
+    ) -> list[str]:
+        """
+        Convert a batch of Markdown documents in order while reusing this parser instance.
+
+        Arguments:
+            sources: The Markdown documents to convert, processed in the given order.
+            reset: When `True` (the default), all state is reset with
+                [`Markdown.reset()`][markdown.Markdown.reset] before each document so that a document
+                cannot be polluted by a previous document's content. Set to `False` to deliberately
+                accumulate state across documents (for example, unique identifiers from an extension).
+
+        Returns:
+            A list of HTML strings in the same order as `sources`.
+
+        Each document gets an isolated set of document-private link references while external references
+        registered through [`registerSharedReferences`][markdown.Markdown.registerSharedReferences] remain
+        available to every document. If converting a document raises an exception, the parser state is
+        reset before the exception propagates, so the failure does not contaminate the remaining
+        documents when the caller continues the batch.
+        """
+        outputs: list[str] = []
+        for source in sources:
+            if reset:
+                self.reset()
+            try:
+                outputs.append(self.convert(source))
+            except BaseException:
+                # Ensure a failed document cannot leak its partial state into the next one.
+                self.reset()
+                raise
+        return outputs
 
     def set_output_format(self, format: str) -> Markdown:
         """
