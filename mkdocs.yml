@@ -87,6 +87,7 @@ nav:
   - Playground: playground.md
   - Development:
     - Extension API: extensions/api.md
+    - ElementTree and Integration: extensions/elementtree.md
     - Test Tools: test_tools.md
     - API Reference:
       - <code>markdown</code>: reference/markdown.md

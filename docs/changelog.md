@@ -883,7 +883,7 @@ See the [Contributing Guide](contributing.md) for details.
     special treatment. This is no longer the case.
 
     Support has been added for extensions to define an [entry
-    point](extensions/api.md#entry_point). An entry point is a string name which
+    point](extensions/elementtree.md#entry_point). An entry point is a string name which
     can be used to point to an `Extension` class. The built-in extensions now have
     entry points which match the old short names. And any third-party extensions
     which define entry points can now get the same behavior. See the documentation
@@ -916,7 +916,7 @@ See the [Contributing Guide](contributing.md) for details.
 * Homegrown `OrderedDict` has been replaced with a purpose-built `Registry`
 
     All processors and patterns now get "registered" to a
-    [Registry](extensions/api.md#registry). A backwards compatible shim is
+    [Registry](extensions/elementtree.md#registry). A backwards compatible shim is
     included so that existing simple extensions should continue to work.
     A `DeprecationWarning` will be raised for any code which calls the old API.
 
