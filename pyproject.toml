@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hl7"
+description = "Python library parsing HL7 v2.x messages"
+readme = "README.rst"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+version = "0.4.6.dev0"
+authors = [
+    { name = "John Paulett", email = "john@paulett.org" }
+]
+keywords = [
+    "HL7",
+    "Health Level 7",
+    "healthcare",
+    "health care",
+    "medical record",
+    "mllp"
+]
+classifiers = [
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Healthcare Industry",
+    "Topic :: Communications",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+
+[project.urls]
+Source = "https://github.com/johnpaulett/python-hl7"
+
+[project.scripts]
+mllp_send = "hl7.client:mllp_send"
+
+[project.optional-dependencies]
+# Development requirements previously listed in requirements.txt
+dev = [
+    "tox==4.26.0",
+    "Sphinx==7.2.6",
+    "coverage==6.3.2",
+    "ruff==0.4.4",
+    "wheel==0.38.1",
+    "setuptools==80.9.0",
+    "hatchling",
+    "commitizen==3.13.0"
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "hl7",
+    "tests",
+    "docs",
+    "README.rst",
+    "LICENSE",
+    "AUTHORS",
+    "MANIFEST.in"
+]
+
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+exclude = [".git", "env", "__pycache__", "build", "dist"]
+
+[tool.ruff.lint]
+ignore = ["E203", "E501"]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.4.6.dev0"
+tag_format = "$version"
+version_files = [
+    "pyproject.toml:version",
+    "hl7/__init__.py:__version__",
+]
+changelog_file = "docs/changelog.rst"
+update_changelog_on_bump = true
