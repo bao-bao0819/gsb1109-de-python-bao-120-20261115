@@ -27,6 +27,7 @@ continue to work as advertised. This used to be accomplished by `doctests`.
 
 import unittest
 import markdown
+from markdown.extensions.meta import MetaPreprocessor
 
 
 class TestExtensionClass(unittest.TestCase):
@@ -153,6 +154,139 @@ The body. This is paragraph one.'''
 
         self.md.reset()
         self.assertEqual(self.md.Meta, {})
+
+    def testDuplicateMetaData(self):
+        """ Repeated keywords keep every value in document order. """
+
+        text = '''Tags: one
+Tags: two
+        more
+Tags: three
+
+Body.'''
+        self.md.convert(text)
+        self.assertEqual(self.md.Meta, {'tags': ['one', 'two', 'more', 'three']})
+
+    def testEmptyValueIsNotContinuation(self):
+        """ Blank values stay blank and do not absorb following lines. """
+
+        text = '''Empty:
+Next: value
+        continued
+AlsoEmpty:
+
+Body.'''
+        self.md.convert(text)
+        self.assertEqual(
+            self.md.Meta,
+            {
+                'empty': [''],
+                'next': ['value', 'continued'],
+                'alsoempty': [''],
+            }
+        )
+
+    def testBodyWithColonsIsPreserved(self):
+        """ A body paragraph containing colons is not parsed as meta-data. """
+
+        text = '''Title: A Test Doc.
+
+Note: this: paragraph: has colons
+and a second line.'''
+        self.assertEqual(
+            self.md.convert(text),
+            '<p>Note: this: paragraph: has colons\nand a second line.</p>'
+        )
+        self.assertEqual(self.md.Meta, {'title': ['A Test Doc.']})
+
+    def testHeaderStopsAtNonFieldLine(self):
+        """ Without delimiters, the first unrecognized line starts the body. """
+
+        text = '''Title: A Test Doc.
+not a field line
+Second: ignored
+
+Body.'''
+        self.assertEqual(
+            self.md.convert(text),
+            '<p>not a field line\nSecond: ignored</p>\n<p>Body.</p>'
+        )
+        self.assertEqual(self.md.Meta, {'title': ['A Test Doc.']})
+
+    def testIncompleteYamlStopsAtBlankLine(self):
+        """ A YAML header without a closing delimiter is left in the body. """
+
+        text = '''---
+Title: A Test Doc.
+
+The body.'''
+        self.assertEqual(
+            self.md.convert(text),
+            '<hr />\n<p>Title: A Test Doc.</p>\n<p>The body.</p>'
+        )
+        self.assertEqual(self.md.Meta, {})
+
+    def testIncompleteYamlStopsAtInvalidLine(self):
+        """ An invalid line inside YAML delimiters aborts the whole header. """
+
+        text = '''---
+Title: A Test Doc.
+not a field line
+more body'''
+        self.assertEqual(
+            self.md.convert(text),
+            '<hr />\n<p>Title: A Test Doc.\nnot a field line\nmore body</p>'
+        )
+        self.assertEqual(self.md.Meta, {})
+
+    def testIncompleteYamlAtEndOfDocument(self):
+        """ Reaching end of input without a closing delimiter aborts. """
+
+        text = '---\nTitle: A Test Doc.'
+        self.assertEqual(
+            self.md.convert(text),
+            '<hr />\n<p>Title: A Test Doc.</p>'
+        )
+        self.assertEqual(self.md.Meta, {})
+
+    def testEndDelimiterWithoutOpeningDelimiter(self):
+        """ An end delimiter still closes a header without an opener. """
+
+        text = '''Title: A Test Doc.
+...
+The body.'''
+        self.assertEqual(
+            self.md.convert(text),
+            '<p>The body.</p>'
+        )
+        self.assertEqual(self.md.Meta, {'title': ['A Test Doc.']})
+
+    def testPreprocessorPreservesBodyRange(self):
+        """ Consumed header and returned body keep the original line ranges. """
+
+        class FakeMarkdown:
+            Meta = {}
+
+        md = FakeMarkdown()
+        preprocessor = MetaPreprocessor(md)
+        lines = 'Title: x\n    cont\n\nBody: line\nsecond'.split('\n')
+        body = preprocessor.run(list(lines))
+        self.assertEqual(md.Meta, {'title': ['x', 'cont']})
+        self.assertEqual(body, lines[2:])
+        self.assertTrue(all(a is b for a, b in zip(body, lines[2:])))
+
+    def testPreprocessorRollsBackIncompleteYaml(self):
+        """ An incomplete YAML header returns every original line untouched. """
+
+        class FakeMarkdown:
+            Meta = {}
+
+        md = FakeMarkdown()
+        preprocessor = MetaPreprocessor(md)
+        lines = '---\nTitle: x\n\nBody'.split('\n')
+        body = preprocessor.run(list(lines))
+        self.assertEqual(md.Meta, {})
+        self.assertEqual(body, lines)
 
 
 class TestWikiLinks(unittest.TestCase):

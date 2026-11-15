@@ -63,15 +63,61 @@ class MetaPreprocessor(Preprocessor):
         """ Parse Meta-Data and store in Markdown.Meta. """
         meta: dict[str, Any] = {}
         key = None
-        if lines and BEGIN_RE.match(lines[0]):
-            lines.pop(0)
-        while lines:
-            line = lines.pop(0)
+
+        in_yaml = bool(lines and BEGIN_RE.match(lines[0]))
+        # Index of the first header line. The YAML opening delimiter is only
+        # consumed once the header proves to be complete.
+        start = 1 if in_yaml else 0
+        # Exclusive end of the header; `None` means it runs to end of input.
+        end = None
+
+        index = start
+        while index < len(lines):
+            line = lines[index]
+            if line.strip() == '':
+                if in_yaml:
+                    # A blank line before a closing delimiter means the YAML
+                    # header is incomplete, so no line is consumed.
+                    self.md.Meta = {}
+                    return lines
+                # The first blank line ends the header and stays in the body.
+                end = index
+                break
+            if END_RE.match(line):
+                # An end delimiter closes the header whether or not an
+                # opening delimiter was used, and is itself consumed.
+                end = index + 1
+                break
             m1 = META_RE.match(line)
-            if line.strip() == '' or END_RE.match(line):
-                break  # blank line or end of YAML header - done
+            if m1:
+                key = m1.group('key')
+            elif not (META_MORE_RE.match(line) and key):
+                if in_yaml:
+                    # Inside YAML delimiters only fields and continuations are
+                    # legal, so an unrecognized line means an incomplete header.
+                    self.md.Meta = {}
+                    return lines
+                # Without delimiters the header simply stops here; this line
+                # and everything after it remain part of the body.
+                end = index
+                break
+            index += 1
+        else:
+            if in_yaml:
+                # Reached end of input without a closing delimiter.
+                self.md.Meta = {}
+                return lines
+
+        header = lines[start:end if end is not None else len(lines)]
+        body = lines[end if end is not None else len(lines):]
+
+        for line in header:
+            m1 = META_RE.match(line)
             if m1:
                 key = m1.group('key').lower().strip()
+                # A field with nothing after the colon is an explicit empty
+                # value; it is stored as its own entry and never folded into
+                # a continuation line.
                 value = m1.group('value').strip()
                 try:
                     meta[key].append(value)
@@ -82,11 +128,9 @@ class MetaPreprocessor(Preprocessor):
                 if m2 and key:
                     # Add another line to existing key
                     meta[key].append(m2.group('value').strip())
-                else:
-                    lines.insert(0, line)
-                    break  # no meta data - done
+
         self.md.Meta = meta
-        return lines
+        return body
 
 
 def makeExtension(**kwargs):  # pragma: no cover

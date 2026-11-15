@@ -43,6 +43,11 @@ See the [Contributing Guide](contributing.md) for details.
 * Fix quadratic processing time in the `tables` extension for long blocks which
   are split into many smaller blocks, such as many headers with no blank lines
   between them (#1704).
+* Fix the `meta` extension so a YAML-style header that is missing its closing
+  delimiter, contains a line that is not a meta-data field, or reaches the end
+  of the document is no longer partially consumed. Such documents are treated
+  as having no meta-data and every line, including the opening delimiter, is
+  left in the body unchanged.
 
 ## [3.11.3] - 2026-11-05
 

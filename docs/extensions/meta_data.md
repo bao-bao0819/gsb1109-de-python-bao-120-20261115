@@ -51,23 +51,34 @@ This is the first paragraph of the document.
 
 The keywords are case-insensitive and may consist of letters, numbers,
 underscores and dashes and must end with a colon. The values consist of
-anything following the colon on the line and may even be blank.
+anything following the colon on the line and may even be blank. A blank
+value is stored as an empty string and is distinct from an indented
+continuation line, which always appends another item to the preceding
+keyword's value.
 
 If a line is indented by 4 or more spaces, that line is assumed to be an
 additional line of the value for the previous keyword. A keyword may have as
 many lines as desired.
 
 The first blank line ends all meta-data for the document. Therefore, the first
-line of a document must not be blank.
+line of a document must not be blank. Any line that is neither a keyword line
+nor an indented continuation also ends the meta-data and is left in the
+document, along with every line that follows it.
 
 Alternatively, You may use YAML style delimiters to mark the start and/or end
 of your meta-data. When doing so, the first line of your document must be `---`.
 The meta-data ends at the first blank line or the first line containing an end
 deliminator (either `---` or `...`), whichever comes first. Even though YAML
-delimiters are supported, meta-data is not parsed as YAML.
+delimiters are supported, meta-data is not parsed as YAML. A document with an
+opening delimiter must contain a valid end deliminator: if a blank line, an
+unrecognized line, or the end of the document is reached first, the header is
+considered incomplete. In that case no meta-data is extracted and every line,
+including the opening delimiter, remains in the document body unchanged.
 
 All meta-data is stripped from the document prior to any further processing
-by Markdown.
+by Markdown. Lines which remain in the body are passed through without any
+modification, so a body paragraph may freely contain colons or
+meta-data-looking text.
 
 Usage
 -----
