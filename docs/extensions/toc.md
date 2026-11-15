@@ -129,6 +129,39 @@ The value of the `data-toc-label` attribute is sanitized and stripped of any HTM
 tags. However, `toc_tokens` will contain the raw content under
 `data-toc-label`.
 
+### Preserving Original Anchors
+
+When a new section is inserted *before* an existing one and both headings have
+the same text, the first heading in document order normally wins the plain
+slug. That would silently move every existing link to the newly inserted
+section. To keep the historic anchor on the original heading, mark it with the
+`data-toc-original` attribute (the [Attribute Lists Extension] must be
+enabled):
+
+```md-render
+---
+extensions: [toc, attr_list]
+---
+# Header
+
+# Header {data-toc-original}
+```
+
+The marked heading keeps the plain anchor (`#header`), while the unmarked
+heading inserted before it receives the deduplicated one (`#header_1`). Inline
+formatting in the title never contributes to the anchor or the visible label,
+so `# *Header*` and `# Header` still collide on the same plain slug. An
+explicit `id` on the marked heading, such as
+`# Header { #my-id data-toc-original }`, is preserved as its anchor.
+
+A heading without the marker is unaffected and keeps the usual first-in-order
+behavior. When two same-named headings are both marked as the original without
+enough evidence to tell them apart (or a marked heading claims an anchor
+already owned by another element), an `IdConflictError` is raised instead of
+guessing which node existing links should point to. Resolve it by giving the
+headings distinct explicit ids. The `data-toc-original` attribute is removed
+from the rendered HTML.
+
 Usage
 -----
 

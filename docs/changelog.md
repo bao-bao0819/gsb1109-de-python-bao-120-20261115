@@ -14,6 +14,14 @@ See the [Contributing Guide](contributing.md) for details.
 
 ## Unreleased
 
+### Added
+
+* The `toc` extension now honors a `data-toc-original` attribute on a heading:
+  the marked heading keeps its historic anchor when a same-named section is
+  inserted before it, so existing links keep pointing at the original node.
+  Same-named headings marked without enough evidence to disambiguate them raise
+  `markdown.extensions.toc.IdConflictError` instead of being matched by name.
+
 ### Fixed
 
 * The `toc` extension no longer raises `TypeError` for a heading whose `id`

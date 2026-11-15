@@ -53,6 +53,12 @@ def slugify_unicode(value: str, separator: str) -> str:
 
 IDCOUNT_RE = re.compile(r'^(.*)_([0-9]+)$')
 
+# Attribute which explicitly marks a heading as the original node of an earlier
+# (slug-identical) heading. When a same-named section is inserted before it, the
+# marked heading keeps its historic anchor while the unmarked heading inserted
+# before it receives a deduplicated one, so existing links keep their target.
+ORIGINAL_ID_ATTR = 'data-toc-original'
+
 
 def unique(id: str, ids: MutableSet[str], counters: dict[str, int] | None = None) -> str:
     """ Ensure id is unique in set of ids. Append '_1', '_2'... if not
@@ -85,6 +91,43 @@ def unique(id: str, ids: MutableSet[str], counters: dict[str, int] | None = None
             counters[base] = count
     ids.add(id)
     return id
+
+
+class IdConflictError(ValueError):
+    """Raised when an explicitly marked original heading cannot keep its anchor.
+
+    This happens when a heading marked as the original node claims an anchor
+    which another explicitly identified heading already claims, or which is
+    already held by an element without such a claim. There is no evidence to
+    decide which same-named heading is the true target, so the ambiguity is
+    surfaced instead of silently retargeting existing links.
+    """
+
+
+def reserve_anchor(
+    el: etree.Element,
+    desired: str,
+    id_owners: dict[str, etree.Element],
+    reserved: dict[str, etree.Element],
+) -> None:
+    """ Reserve the anchor explicitly claimed by a marked original heading.
+
+    `desired` is the heading's own explicit id when present, otherwise the slug
+    derived from its heading text. The claim succeeds only when the anchor is
+    still free or is already owned by this same heading; if another element
+    (heading or not) owns it, `IdConflictError` is raised and the caller must
+    disambiguate rather than silently retargeting existing links.
+    """
+    owner = reserved.get(desired)
+    if owner is None:
+        owner = id_owners.get(desired)
+    if owner is not None and owner is not el:
+        raise IdConflictError(
+            f"The heading marked as the original node cannot keep anchor "
+            f"#{desired}, which another element already uses; disambiguate "
+            f"it with a distinct explicit id."
+        )
+    reserved[desired] = el
 
 
 @deprecated('Use `render_inner_html` and `striptags` instead.')
@@ -385,48 +428,82 @@ class TocTreeprocessor(Treeprocessor):
         return div
 
     def run(self, doc: etree.Element) -> None:
-        # Get a list of id attributes
+        # Map every pre-existing id to the element carrying it, alongside the
+        # plain set of occupied ids used for slug deduplication.
         used_ids = set()
+        id_owners: dict[str, etree.Element] = {}
         for el in doc.iter():
             if "id" in el.attrib:
                 used_ids.add(el.attrib["id"])
+                id_owners.setdefault(el.attrib["id"], el)
         id_counters: dict[str, int] = {}
 
-        toc_tokens = []
+        # First pass: derive the anchor each heading wants. A heading explicitly
+        # marked as an original node reserves its historic anchor before any
+        # generated slug is handed out, regardless of document order, so a
+        # same-named section inserted before it cannot hijack existing links.
+        # Reservations which lack enough evidence are reported as conflicts.
+        reserved: dict[str, etree.Element] = {}
+        records = []
         for el in doc.iter():
             if isinstance(el.tag, str) and self.header_rgx.match(el.tag):
-                self.set_level(el)
                 innerhtml = render_inner_html(remove_fnrefs(el), self.md)
                 name = strip_tags(innerhtml)
+                slug = self.slugify(html.unescape(name), self.sep)
+                marked = ORIGINAL_ID_ATTR in el.attrib
+                anchor = None
+                if marked:
+                    desired = el.attrib.get("id") or slug
+                    if desired:
+                        reserve_anchor(el, desired, id_owners, reserved)
+                        anchor = desired
+                    # An empty anchor (e.g. a punctuation-only heading) cannot be
+                    # reserved; it is generated like any other id-less heading.
+                records.append((el, name, innerhtml, slug, marked, anchor))
 
-                # Do not override pre-existing ids
-                if not el.attrib.get("id"):
-                    # The `attr_list` extension writes bare attributes with a
-                    # value of None. A valueless id is no id at all, so a slug
-                    # is generated for it like for any other id-less heading.
-                    el.attrib["id"] = unique(self.slugify(html.unescape(name), self.sep), used_ids, id_counters)
+        # Reserved anchors are now occupied; generated slugs deduplicate around
+        # them just as they do around any pre-existing id.
+        used_ids.update(reserved)
 
-                data_toc_label = ''
-                if 'data-toc-label' in el.attrib:
-                    data_toc_label = run_postprocessors(unescape(el.attrib['data-toc-label']), self.md)
-                    # Overwrite name with sanitized value of `data-toc-label`.
-                    name = escape_cdata(strip_tags(data_toc_label))
-                    # Remove the data-toc-label attribute as it is no longer needed
-                    del el.attrib['data-toc-label']
+        toc_tokens = []
+        for el, name, innerhtml, slug, marked, anchor in records:
+            self.set_level(el)
 
-                if int(el.tag[-1]) >= self.toc_top and int(el.tag[-1]) <= self.toc_bottom:
-                    toc_tokens.append({
-                        'level': int(el.tag[-1]),
-                        'id': unescape(el.attrib["id"]),
-                        'name': name,
-                        'html': innerhtml,
-                        'data-toc-label': data_toc_label
-                    })
+            if marked:
+                # The marker has served its purpose in the first pass.
+                del el.attrib[ORIGINAL_ID_ATTR]
 
-                if self.use_anchors:
-                    self.add_anchor(el, el.attrib["id"])
-                if self.use_permalinks not in [False, None]:
-                    self.add_permalink(el, el.attrib["id"])
+            # Do not override pre-existing ids
+            if anchor:
+                # The reservation guarantees this anchor belongs to this heading.
+                el.attrib["id"] = anchor
+            elif not el.attrib.get("id"):
+                # The `attr_list` extension writes bare attributes with a
+                # value of None. A valueless id is no id at all, so a slug
+                # is generated for it like for any other id-less heading.
+                el.attrib["id"] = unique(slug, used_ids, id_counters)
+
+            data_toc_label = ''
+            if 'data-toc-label' in el.attrib:
+                data_toc_label = run_postprocessors(unescape(el.attrib['data-toc-label']), self.md)
+                # Overwrite name with sanitized value of `data-toc-label`.
+                name = escape_cdata(strip_tags(data_toc_label))
+                # Remove the data-toc-label attribute as it is no longer needed
+                del el.attrib['data-toc-label']
+
+            if int(el.tag[-1]) >= self.toc_top and int(el.tag[-1]) <= self.toc_bottom:
+                toc_tokens.append({
+                    'level': int(el.tag[-1]),
+                    'id': unescape(el.attrib["id"]),
+                    'name': name,
+                    'html': innerhtml,
+                    'data-toc-label': data_toc_label
+                })
+
+            if self.use_anchors:
+                self.add_anchor(el, el.attrib["id"])
+            if self.use_permalinks not in [False, None]:
+                self.add_permalink(el, el.attrib["id"])
 
         toc_tokens = nest_toc_tokens(toc_tokens)
         div = self.build_toc_div(toc_tokens)

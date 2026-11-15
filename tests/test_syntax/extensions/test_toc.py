@@ -21,7 +21,7 @@ License: BSD (see LICENSE.md for details).
 
 from markdown.test_tools import TestCase
 from markdown import Markdown
-from markdown.extensions.toc import TocExtension, strip_tags, unique
+from markdown.extensions.toc import TocExtension, strip_tags, unique, IdConflictError
 from markdown.extensions.attr_list import AttrListExtension
 from markdown.extensions.nl2br import Nl2BrExtension
 
@@ -1610,4 +1610,216 @@ class TestTOCWithAttrList(TestCase):
               '</ul>\n'                                                # noqa
             '</div>\n'
             '<h1 id="heading-one">Heading One</h1>'
+        )
+
+
+class TestTOCOriginalAnchor(TestCase):
+    """An explicitly marked original heading keeps its historic anchor (#002)."""
+
+    maxDiff = None
+    default_kwargs = {
+        'extensions': [TocExtension(), AttrListExtension()]
+    }
+
+    def testInsertedSameNamedSectionGetsDeduplicatedId(self):
+        # A same-named section inserted before the original node does not take
+        # its anchor: the original keeps `header`, the newcomer gets `header_1`.
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # Header
+
+                # Header {data-toc-original}
+
+                See [the original](#header).
+                '''
+            ),
+            '<h1 id="header_1">Header</h1>\n'
+            '<h1 id="header">Header</h1>\n'
+            '<p>See <a href="#header">the original</a>.</p>'
+        )
+
+    def testMarkedOriginalBeforeInsertedSection(self):
+        # The marker is order-independent: the original keeps its anchor even
+        # when it physically comes first and a duplicate follows.
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # Header {data-toc-original}
+
+                # Header
+                '''
+            ),
+            '<h1 id="header">Header</h1>\n'
+            '<h1 id="header_1">Header</h1>'
+        )
+
+    def testFormattingInTitleDoesNotEnterAnchorOrLabel(self):
+        # Inline formatting contributes neither to the slug nor the visible TOC
+        # word, so a formatted newcomer still collides on the same plain slug.
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # *Header*
+
+                # Header {data-toc-original}
+                '''
+            ),
+            '<h1 id="header_1"><em>Header</em></h1>\n'
+            '<h1 id="header">Header</h1>',
+            expected_attrs={
+                'toc_tokens': [
+                    {
+                        'level': 1,
+                        'id': 'header_1',
+                        'name': 'Header',
+                        'html': '<em>Header</em>',
+                        'data-toc-label': '',
+                        'children': []
+                    },
+                    {
+                        'level': 1,
+                        'id': 'header',
+                        'name': 'Header',
+                        'html': 'Header',
+                        'data-toc-label': '',
+                        'children': []
+                    }
+                ]
+            }
+        )
+
+    def testMarkedOriginalWithExplicitId(self):
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # Header
+
+                # Header { #keep data-toc-original }
+
+                [link](#keep)
+                '''
+            ),
+            '<h1 id="header">Header</h1>\n'
+            '<h1 id="keep">Header</h1>\n'
+            '<p><a href="#keep">link</a></p>'
+        )
+
+    def testInDocumentLinkReachesActualTarget(self):
+        # Both the TOC and an in-document link resolve to the real ids.
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                [TOC]
+
+                # Header
+
+                # Header {data-toc-original}
+
+                [jump](#header)
+                '''
+            ),
+            '<div class="toc">\n'
+              '<ul>\n'                                                        # noqa
+                '<li><a href="#header_1">Header</a></li>\n'                  # noqa
+                '<li><a href="#header">Header</a></li>\n'                    # noqa
+              '</ul>\n'                                                       # noqa
+            '</div>\n'                                                         # noqa
+            '<h1 id="header_1">Header</h1>\n'
+            '<h1 id="header">Header</h1>\n'
+            '<p><a href="#header">jump</a></p>'
+        )
+
+    def testPermalinkAndAnchorLinkUseResolvedIds(self):
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # Header
+
+                # Header {data-toc-original}
+                '''
+            ),
+            '<h1 id="header_1"><a class="toclink" href="#header_1">Header</a>'
+                '<a class="headerlink" href="#header_1" title="Permanent link">&para;</a></h1>\n'
+            '<h1 id="header"><a class="toclink" href="#header">Header</a>'
+                '<a class="headerlink" href="#header" title="Permanent link">&para;</a></h1>',
+            extensions=[TocExtension(anchorlink=True, permalink=True), AttrListExtension()]
+        )
+
+    def testMarkerAttributeIsRemoved(self):
+        # The bookkeeping marker must not leak into the rendered output.
+        html = Markdown(
+            extensions=[TocExtension(), AttrListExtension()]
+        ).convert('# Header {data-toc-original}')
+        self.assertNotIn('data-toc-original', html)
+
+    def testTwoMarkedHeadingsWithoutEvidenceConflict(self):
+        # Two same-named headings both claiming the same anchor cannot be
+        # disambiguated: the conflict is raised rather than guessed.
+        md = Markdown(extensions=[TocExtension(), AttrListExtension()])
+        with self.assertRaises(IdConflictError):
+            md.convert(
+                self.dedent(
+                    '''
+                    # Header {data-toc-original}
+
+                    # Header {data-toc-original}
+                    '''
+                )
+            )
+
+    def testMarkedHeadingClaimingOccupiedSlugConflicts(self):
+        # An unmarked heading already owns the slug the marker asks for.
+        md = Markdown(extensions=[TocExtension(), AttrListExtension()])
+        with self.assertRaises(IdConflictError):
+            md.convert(
+                self.dedent(
+                    '''
+                    # Other { #header }
+
+                    # Header {data-toc-original}
+                    '''
+                )
+            )
+
+    def testTwoMarkedHeadingsWithDistinctExplicitIds(self):
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # Header { #alpha data-toc-original }
+
+                # Header { #beta data-toc-original }
+                '''
+            ),
+            '<h1 id="alpha">Header</h1>\n'
+            '<h1 id="beta">Header</h1>'
+        )
+
+    def testMarkedHeadingWithEmptySlugFallsBackToGeneratedId(self):
+        # A punctuation-only heading has no slug to preserve; it is generated
+        # like any id-less heading instead of producing an empty id.
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # ??? {data-toc-original}
+
+                # ???
+                '''
+            ),
+            '<h1 id="_1">???</h1>\n'
+            '<h1 id="_2">???</h1>'
+        )
+
+    def testUnmarkedDuplicatesKeepFirstWinsBehavior(self):
+        # Without the explicit marker nothing changes: first occurrence wins.
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # Header
+
+                # Header
+                '''
+            ),
+            '<h1 id="header">Header</h1>\n'
+            '<h1 id="header_1">Header</h1>'
         )
