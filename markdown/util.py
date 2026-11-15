@@ -359,6 +359,15 @@ class Registry(Generic[_T]):
             )
         raise ValueError('No item named "{}" exists.'.format(name))
 
+    def get_name_for_item(self, item: _T) -> str:
+        """
+        Return the name assigned to the given item.
+        """
+        for name, value in self._data.items():
+            if value is item:
+                return name
+        raise ValueError('No item "{}" exists.'.format(item))
+
     def register(self, item: _T, name: str, priority: float) -> None:
         """
         Add an item to the registry with the given name and priority.

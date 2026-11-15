@@ -30,6 +30,7 @@ Modules:
     treeprocessors: Tree processors.
     inlinepatterns: Inline patterns.
     postprocessors: Post-processors.
+    provenance: Optional fragment provenance tracking.
     serializers: Serializers.
     util: Utility functions.
     htmlparser: HTML parser.

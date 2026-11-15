@@ -31,6 +31,7 @@ import markdown
 import warnings
 from markdown.__main__ import parse_options
 from markdown import inlinepatterns
+from markdown.provenance import FragmentProvenance
 from logging import DEBUG, WARNING, CRITICAL
 import yaml
 import tempfile
@@ -74,6 +75,82 @@ class TestMarkdownBasics(unittest.TestCase):
     def testDotNotationExtensionWithClass(self):
         """ Test Extension loading with class name (`path.to.module:Class`). """
         markdown.Markdown(extensions=['markdown.extensions.footnotes:FootnoteExtension'])
+
+
+class TestFragmentProvenance(unittest.TestCase):
+    """ Tests of the optional fragment provenance tracking. """
+
+    def testDisabledByDefault(self):
+        """ Provenance tracking is off unless requested. """
+        md = markdown.Markdown()
+        self.assertIsNone(md.provenance)
+        self.assertEqual(md.convert('foo'), '<p>foo</p>')
+
+    def testOutputMatchesUntrackedOutput(self):
+        """ Diagnostic mode does not alter the output. """
+        text = (
+            'Title: A document\n'
+            'toc: summary\n'
+            '\n'
+            '# Header\n'
+            '\n'
+            '<div>\n'
+            'raw html\n'
+            '</div>\n'
+            '\n'
+            'Some *text* with a [link](http://example.com).\n'
+        )
+        tracked = markdown.Markdown(extensions=['meta'], track_provenance=True)
+        untracked = markdown.Markdown(extensions=['meta'])
+        self.assertEqual(tracked.convert(text), untracked.convert(text))
+
+    def testRecordsWhichRuleConsumedContent(self):
+        """ A record identifies the rule which consumed a fragment. """
+        md = markdown.Markdown(extensions=['meta'], track_provenance=True)
+        md.convert('toc: summary\n\nSome text.')
+        records = [r for r in md.provenance if r.rule == 'meta']
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].stage, 'preprocessor')
+        self.assertIn('toc: summary', records[0].consumed)
+        self.assertEqual(records[0].produced, '')
+
+    def testUnchangedRuleIsNotRecorded(self):
+        """ A rule which changed nothing is not recorded as a source. """
+        md = markdown.Markdown(extensions=['meta'], track_provenance=True)
+        md.convert('Some text with no meta data.')
+        self.assertNotIn('meta', [r.rule for r in md.provenance])
+
+    def testNestedRewriteTracesToOriginalFragment(self):
+        """ A nested rewrite is traced back to the original source fragment. """
+        md = markdown.Markdown(track_provenance=True)
+        output = md.convert('<div>\nraw html\n</div>')
+        self.assertIn('<div>', output)
+        chain = md.provenance.trace('<div>')
+        # The raw_html postprocessor most recently produced the fragment...
+        self.assertEqual(chain[0].rule, 'raw_html')
+        self.assertEqual(chain[0].stage, 'postprocessor')
+        # ...by rewriting the placeholder produced by the html_block preprocessor...
+        self.assertEqual(chain[1].rule, 'html_block')
+        self.assertEqual(chain[1].stage, 'preprocessor')
+        # ...which consumed the original source fragment.
+        self.assertEqual(md.provenance.origin('<div>'), chain[-1].consumed)
+        self.assertIn('<div>', chain[-1].consumed)
+
+    def testResetClearsRecords(self):
+        """ Records do not leak into the next conversion. """
+        md = markdown.Markdown(extensions=['meta'], track_provenance=True)
+        md.convert('toc: summary\n\nSome text.')
+        self.assertNotEqual(len(md.provenance), 0)
+        md.reset()
+        self.assertEqual(len(md.provenance), 0)
+
+    def testSharedInstance(self):
+        """ An existing FragmentProvenance instance collects the records. """
+        provenance = FragmentProvenance()
+        md = markdown.Markdown(track_provenance=provenance)
+        md.convert('foo')
+        self.assertIs(md.provenance, provenance)
+        self.assertNotEqual(len(provenance.records), 0)
 
 
 class TestConvertFile(unittest.TestCase):

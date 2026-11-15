@@ -31,6 +31,7 @@ from .treeprocessors import build_treeprocessors
 from .inlinepatterns import build_inlinepatterns, DelimiterProcessor
 from .postprocessors import build_postprocessors
 from .extensions import Extension
+from .provenance import FragmentProvenance
 from .serializers import to_html_string, to_xhtml_string
 from .util import BLOCK_LEVEL_ELEMENTS
 
@@ -71,6 +72,10 @@ class Markdown:
         Markdown.inlinePatterns (util.Registry): A collection of [`inlinepatterns`][markdown.inlinepatterns].
         Markdown.treeprocessors (util.Registry): A collection of [`treeprocessors`][markdown.treeprocessors].
         Markdown.postprocessors (util.Registry): A collection of [`postprocessors`][markdown.postprocessors].
+        Markdown.provenance (provenance.FragmentProvenance | None): The
+            [`FragmentProvenance`][markdown.provenance.FragmentProvenance] instance which records which rules
+            consumed or replaced fragments of the document, or `None` when fragment provenance tracking
+            is disabled (the default).
 
     """
 
@@ -103,6 +108,13 @@ class Markdown:
                 * `xhtml`: Outputs XHTML style tags. Default.
                 * `html`: Outputs HTML style tags.
             tab_length (int): Length of tabs in the source. Default: `4`
+            track_provenance (bool | FragmentProvenance): Record which rules consume or
+                replace fragments of the document during conversion. Pass `True` to enable
+                tracking with a new [`FragmentProvenance`][markdown.provenance.FragmentProvenance]
+                instance, or pass an existing instance to collect records into it. The records
+                are available on [`Markdown.provenance`][markdown.Markdown] after a call to
+                [`convert`][markdown.Markdown.convert]. Tracking is purely observational and
+                does not alter the output. Default: `False`
 
         """
 
@@ -120,6 +132,14 @@ class Markdown:
         self.docType = ""  # TODO: Maybe delete this. It does not appear to be used anymore.
         self.stripTopLevelTags: bool = True
         self.delimiters: DelimiterProcessor | None = None
+
+        track_provenance = kwargs.get('track_provenance', False)
+        if isinstance(track_provenance, FragmentProvenance):
+            self.provenance: FragmentProvenance | None = track_provenance
+        elif track_provenance:
+            self.provenance = FragmentProvenance()
+        else:
+            self.provenance = None
 
         self.build_parser()
 
@@ -272,6 +292,9 @@ class Markdown:
         self.htmlStash.reset()
         self.references.clear()
 
+        if self.provenance is not None:
+            self.provenance.reset()
+
         if self.delimiters is not None:
             self.delimiters.reset()
             if self.delimiters not in self.inlinePatterns:
@@ -364,7 +387,14 @@ class Markdown:
         # Split into lines and run the line preprocessors.
         self.lines = source.split("\n")
         for prep in self.preprocessors:
-            self.lines = prep.run(self.lines)
+            if self.provenance is not None:
+                before = '\n'.join(self.lines)
+                self.lines = prep.run(self.lines)
+                self.provenance.record(
+                    'preprocessor', self.preprocessors.get_name_for_item(prep), before, '\n'.join(self.lines)
+                )
+            else:
+                self.lines = prep.run(self.lines)
 
         # Parse the high-level elements.
         root = self.parser.parseDocument(self.lines).getroot()
@@ -394,7 +424,14 @@ class Markdown:
 
         # Run the text post-processors
         for pp in self.postprocessors:
-            output = pp.run(output)
+            if self.provenance is not None:
+                before = output
+                output = pp.run(output)
+                self.provenance.record(
+                    'postprocessor', self.postprocessors.get_name_for_item(pp), before, output
+                )
+            else:
+                output = pp.run(output)
 
         return output.strip()
 
