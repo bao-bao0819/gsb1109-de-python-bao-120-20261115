@@ -1,0 +1,7 @@
+lxml
+numpy
+matplotlib
+pandas
+sqlalchemy
+pynumpress
+scikit-learn

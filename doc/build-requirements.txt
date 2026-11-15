@@ -1,0 +1,8 @@
+sphinx>7
+lxml
+pandas
+sqlalchemy
+matplotlib
+git+https://github.com/sphinx-contrib/googleanalytics.git
+sphinx-sitemap
+h5py

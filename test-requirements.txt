@@ -1,0 +1,13 @@
+lxml
+numpy
+matplotlib
+pandas
+sqlalchemy >= 1.4
+psycopg[binary]
+cython
+h5py
+hdf5plugin
+pynumpress < 0.1.2; python_version < '3.11'
+pynumpress; python_version >= '3.11'
+psims >= 1.4.0
+spectrum_utils
