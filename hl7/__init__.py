@@ -19,6 +19,15 @@ from .containers import (
     Sequence,
 )
 from .datatypes import parse_datetime
+from .delivery import (
+    CandidateReceipt,
+    DeliveryAttempt,
+    DeliveryRow,
+    DeliveryTable,
+    Receipt,
+    build_delivery_table,
+    format_delivery_table,
+)
 from .exceptions import (
     HL7Exception,
     MalformedBatchException,
@@ -61,6 +70,13 @@ __all__ = [
     "split_file",
     "generate_message_control_id",
     "parse_datetime",
+    "DeliveryAttempt",
+    "DeliveryRow",
+    "DeliveryTable",
+    "Receipt",
+    "CandidateReceipt",
+    "build_delivery_table",
+    "format_delivery_table",
     "HL7Exception",
     "MalformedBatchException",
     "MalformedFileException",

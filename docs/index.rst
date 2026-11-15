@@ -257,6 +257,7 @@ Contents
    :maxdepth: 1
 
    api
+   delivery
    mllp_send
    mllp
    accessors

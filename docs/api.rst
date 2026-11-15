@@ -31,6 +31,25 @@ python-hl7 API
 
 .. autofunction:: hl7.parse_datetime
 
+Delivery status
+---------------
+
+.. autofunction:: hl7.build_delivery_table
+
+.. autofunction:: hl7.format_delivery_table
+
+.. autoclass:: hl7.DeliveryTable
+   :members: as_rows, as_candidates, to_dicts
+
+.. autoclass:: hl7.DeliveryRow
+   :members: status, code, final_status, late_receipts
+
+.. autoclass:: hl7.Receipt
+
+.. autoclass:: hl7.CandidateReceipt
+
+.. autoclass:: hl7.DeliveryAttempt
+
 
 Data Types
 ----------
