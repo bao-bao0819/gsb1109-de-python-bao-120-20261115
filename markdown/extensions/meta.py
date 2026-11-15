@@ -63,12 +63,17 @@ class MetaPreprocessor(Preprocessor):
         """ Parse Meta-Data and store in Markdown.Meta. """
         meta: dict[str, Any] = {}
         key = None
+        yaml_style = False
+        consumed: list[str] = []
         if lines and BEGIN_RE.match(lines[0]):
-            lines.pop(0)
+            yaml_style = True
+            consumed.append(lines.pop(0))
+        terminated = not yaml_style
         while lines:
             line = lines.pop(0)
             m1 = META_RE.match(line)
             if line.strip() == '' or END_RE.match(line):
+                terminated = True
                 break  # blank line or end of YAML header - done
             if m1:
                 key = m1.group('key').lower().strip()
@@ -85,6 +90,12 @@ class MetaPreprocessor(Preprocessor):
                 else:
                     lines.insert(0, line)
                     break  # no meta data - done
+            consumed.append(line)
+        if yaml_style and not terminated:
+            # Incomplete YAML header: restore the original lines so the
+            # body is passed through with its original bytes unchanged.
+            lines[:0] = consumed
+            meta = {}
         self.md.Meta = meta
         return lines
 

@@ -66,6 +66,12 @@ The meta-data ends at the first blank line or the first line containing an end
 deliminator (either `---` or `...`), whichever comes first. Even though YAML
 delimiters are supported, meta-data is not parsed as YAML.
 
+A YAML style header is only stripped from the document if its structure is
+complete: every line within the delimiters must be a valid meta-data line and
+the header must be closed by a blank line or an end deliminator. Otherwise,
+the header is considered incomplete and all lines (including the opening
+`---`) are passed through to the document body unchanged.
+
 All meta-data is stripped from the document prior to any further processing
 by Markdown.
 

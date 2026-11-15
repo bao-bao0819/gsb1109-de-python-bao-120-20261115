@@ -140,6 +140,79 @@ The body. This is paragraph one.'''
         self.assertEqual(self.md.convert(text), '')
         self.assertEqual(self.md.Meta, {'title': ['No newline']})
 
+    def testMetaDataDuplicateKeys(self):
+        """ Test that duplicate meta-data keys are preserved as a list. """
+
+        text = '''tag: a
+tag: b
+
+The body.'''
+        self.assertEqual(self.md.convert(text), '<p>The body.</p>')
+        self.assertEqual(self.md.Meta, {'tag': ['a', 'b']})
+
+    def testMetaDataEmptyValueAndContinuation(self):
+        """ Test that an empty value is distinct from a continuation line. """
+
+        text = '''Blank_Data:
+    continued
+
+The body.'''
+        self.assertEqual(self.md.convert(text), '<p>The body.</p>')
+        self.assertEqual(self.md.Meta, {'blank_data': ['', 'continued']})
+
+    def testYamlMetaDataInvalidLine(self):
+        """ Test that an unterminated YAML header is left in the document. """
+
+        text = '''---
+Title: A Test Doc.
+This line is not meta-data.
+
+The body.'''
+        self.assertEqual(
+            self.md.convert(text),
+            '<hr />\n<p>Title: A Test Doc.\nThis line is not meta-data.</p>\n'
+            '<p>The body.</p>'
+        )
+        self.assertEqual(self.md.Meta, {})
+
+    def testYamlMetaDataNoMetaData(self):
+        """ Test that a `---` not followed by meta-data is not a header. """
+
+        text = '''---
+Just body text here.
+More text.'''
+        self.assertEqual(
+            self.md.convert(text),
+            '<hr />\n<p>Just body text here.\nMore text.</p>'
+        )
+        self.assertEqual(self.md.Meta, {})
+
+    def testYamlMetaDataUnterminated(self):
+        """ Test that a YAML header with no end delimiter is left alone. """
+
+        text = '''---
+Title: A Test Doc.
+and no end delimiter'''
+        self.assertEqual(
+            self.md.convert(text),
+            '<hr />\n<p>Title: A Test Doc.\nand no end delimiter</p>'
+        )
+        self.assertEqual(self.md.Meta, {})
+
+    def testYamlMetaDataColonInBody(self):
+        """ Test that a body paragraph containing a colon is not meta-data. """
+
+        text = '''---
+Title: A Test Doc.
+---
+Note: The first paragraph of the body.
+continues here.'''
+        self.assertEqual(
+            self.md.convert(text),
+            '<p>Note: The first paragraph of the body.\ncontinues here.</p>'
+        )
+        self.assertEqual(self.md.Meta, {'title': ['A Test Doc.']})
+
     def testMetaDataReset(self):
         """ Test that reset call remove Meta entirely """
 
