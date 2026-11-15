@@ -6,6 +6,14 @@
 """
 
 from .accessor import Accessor
+from .archive import (
+    ArchiveResult,
+    OrderArchiver,
+    ParentLocation,
+    SegmentGroupRule,
+    normalize_rules,
+    split_orders,
+)
 from .containers import (
     Batch,
     Component,
@@ -60,6 +68,12 @@ __all__ = [
     "isfile",
     "split_file",
     "generate_message_control_id",
+    "split_orders",
+    "SegmentGroupRule",
+    "OrderArchiver",
+    "ArchiveResult",
+    "ParentLocation",
+    "normalize_rules",
     "parse_datetime",
     "HL7Exception",
     "MalformedBatchException",

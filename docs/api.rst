@@ -29,6 +29,28 @@ python-hl7 API
 
 .. autofunction:: hl7.generate_message_control_id
 
+Order Archiving
+---------------
+
+See :doc:`archive` for a worked example.  The public entry point is also
+available as :py:func:`hl7.split_orders`.
+
+.. autofunction:: hl7.archive.split_orders
+
+.. autoclass:: hl7.archive.SegmentGroupRule
+   :members: starts_with, accepts, claims_z, from_mapping
+
+.. autofunction:: hl7.archive.normalize_rules
+
+.. autoclass:: hl7.archive.OrderArchiver
+   :members: split, archive
+
+.. autoclass:: hl7.archive.ArchiveResult
+   :members: children, orders, pending, unassigned_segments, event_segments, event_count, common_occurrences, by_order
+
+.. autoclass:: hl7.archive.ParentLocation
+   :members: control_id, segment_number, segment_range, message_index
+
 .. autofunction:: hl7.parse_datetime
 
 

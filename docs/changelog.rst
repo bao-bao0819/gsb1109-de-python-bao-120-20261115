@@ -4,6 +4,14 @@ Changelog
 0.4.6 - Unreleased
 ------------------
 
+* Added :py:func:`hl7.split_orders` (also available as
+  :py:func:`hl7.archive.split_orders`) to archive a multi-order HL7 message as
+  independent per-order messages.  Callers supply their own segment group
+  rules; each child receives the patient, visit and common prefix segments it
+  needs, a newly generated ``MSH-10`` control ID and a record of its position in
+  the parent message.  Common segments are tagged as such so copying them into
+  every child does not create additional events.  Unclaimed ``Z`` segments are
+  returned as pending instead of being attached to the nearest order.
 * Dropped support for Python 3.7 and 3.8. Python 3.9 - 3.13 are now supported.
 * Switched development dependencies to be installed using ``uv`` instead of ``pip``.
 * Converted packaging to ``pyproject.toml`` using ``hatchling`` and removed

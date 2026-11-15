@@ -257,6 +257,7 @@ Contents
    :maxdepth: 1
 
    api
+   archive
    mllp_send
    mllp
    accessors
