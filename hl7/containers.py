@@ -478,10 +478,22 @@ class Message(Container):
         Assign a value into a message using the tree based assignment notation.
         The segment must exist.
 
+        The *value* is escaped using this message's own separator and escape
+        characters before it is stored, so that separator characters inside the
+        value are emitted as HL7 escape sequences (e.g. ``\\F\\``) rather than
+        being reinterpreted as structural delimiters when the message is
+        serialized. MSH-1/MSH-2 (and their BHS/FHS equivalents) define the
+        delimiter characters themselves and are therefore stored verbatim.
+
         Extract a field using a future proofed approach, based on rules in:
         http://wiki.medical-objects.com.au/index.php/Hl7v2_parsing
         """
-        self.segments(segment)(segment_num).assign_field(
+        target_segment = self.segments(segment)(segment_num)
+        if isinstance(value, str) and not (
+            segment in ("MSH", "BHS", "FHS") and field_num in (1, 2)
+        ):
+            value = escape(target_segment, value)
+        target_segment.assign_field(
             value, field_num, repeat_num, component_num, subcomponent_num
         )
 

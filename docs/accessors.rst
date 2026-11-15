@@ -196,6 +196,21 @@ You can also assign values using :py:class:`hl7.Accessor`, or by directly callin
     >>> response[hl7.Accessor('MSA', 1, 1, 1)] = 'AA'
     >>> response.assign_field('AA', 'MSA', 1, 1, 1)
 
+Assigned values are escaped using the message's own separator and escape
+characters before being stored, so a separator inside a value is emitted as an
+escape sequence rather than being reinterpreted as a structural delimiter:
+
+.. doctest::
+
+    >>> response['MSA.F4.R1'] = 'a|b~c'
+    >>> str(response)
+    'MSH|^~\\&|||||||ORU^R01^|||2.4\rMSA|AA||Application Message|a\\F\\b\\R\\c\r'
+
+This follows each message's own rules, so a batch whose messages declare
+different separator characters escapes each value with that message's
+characters. MSH-1 and MSH-2 define the delimiter characters and are always
+stored verbatim.
+
 Escaping Content
 ----------------
 

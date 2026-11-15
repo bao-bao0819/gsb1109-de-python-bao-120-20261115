@@ -280,6 +280,25 @@ class ParseTest(TestCase):
         msg = hl7.parse(rep_sample_hl7.replace("Repeat1", ""))
         self.assertEqual(msg[1][4], [[""], ["Repeat2"]])
 
+    def test_empty_middle_and_trailing_repetitions(self):
+        # Empty repetitions, including middle and trailing ones, must be
+        # retained so hierarchical positions are preserved
+        msg = hl7.parse("MSH|^~\\&|\rPID|a~~b|~x~|c~\r")
+        self.assertEqual([list(r) for r in msg[1][1]], [["a"], [""], ["b"]])
+        self.assertEqual([list(r) for r in msg[1][2]], [[""], ["x"], [""]])
+        self.assertEqual([list(r) for r in msg[1][3]], [["c"], [""]])
+        self.assertEqual(str(msg), "MSH|^~\\&|\rPID|a~~b|~x~|c~\r")
+
+    def test_escaped_separators_are_not_structural(self):
+        # Escaped delimiters are field data and must never be re-split
+        src = "MSH|^~\\&|\rPID|1|a\\F\\b\\R\\c\\S\\d\\T\\e\r"
+        msg = hl7.parse(src)
+        self.assertEqual(msg["PID.2"], "a|b~c^d&e")
+        # The escaped content stays within a single field and round-trips
+        self.assertEqual(len(msg[1]), 3)
+        self.assertEqual(str(msg), src)
+        self.assertEqual(str(hl7.parse(str(msg))), src)
+
     def test_subcomponent(self):
         msg = hl7.parse(rep_sample_hl7)
         self.assertEqual(
@@ -355,6 +374,64 @@ class ParseTest(TestCase):
         self.assertEqual(msg2["MSH.20"], "FIELD 20")
         self.assertEqual(msg2["MSH.21.1.1"], "COMPONENT 21.1.1")
         self.assertEqual(msg2["MSH.21.1.2.4"], "SUBCOMPONENT 21.1.2.4")
+
+    def test_assign_escapes_structural_separators(self):
+        # A new value containing separator characters must be escaped using
+        # this message's rules so it is not reinterpreted as structure on output
+        msg = hl7.parse("MSH|^~\\&|\rPID|1\r")
+        msg["PID.2"] = "p|q~r^s&t\\u"
+        output = str(msg)
+        self.assertIn("p\\F\\q\\R\\r\\S\\s\\T\\t\\E\\u", output)
+        # Structure preserved and the unescaped value is recoverable
+        reparsed = hl7.parse(output)
+        self.assertEqual(len(reparsed[1]), 3)
+        self.assertEqual(reparsed["PID.2"], "p|q~r^s&t\\u")
+
+    def test_assign_escapes_using_message_specific_characters(self):
+        # Non-standard message: field $, component %, repetition #,
+        # escape /, sub-component !
+        msg = hl7.parse("MSH$%#/!$\rPID$x\r")
+        self.assertEqual(msg.separators, "\r$#%!")
+        self.assertEqual(msg.esc, "/")
+        msg["PID.2"] = "p$q#r%s!t/u"
+        output = str(msg)
+        self.assertIn("p/F/q/R/r/S/s/T/t/E/u", output)
+        reparsed = hl7.parse(output)
+        self.assertEqual(len(reparsed[1]), 3)
+        self.assertEqual(reparsed["PID.2"], "p$q#r%s!t/u")
+
+    def test_assign_deep_path_escapes_and_keeps_positions(self):
+        msg = hl7.parse("MSH|^~\\&|\rPID|1\r")
+        msg["PID.3.1.2"] = "1|2"
+        msg["PID.4.2.1"] = "x&y"
+        output = str(msg)
+        reparsed = hl7.parse(output)
+        self.assertEqual(reparsed["PID.3.1.2"], "1|2")
+        self.assertEqual(reparsed["PID.4.2.1"], "x&y")
+
+    def test_assign_msh_delimiter_fields_verbatim(self):
+        # MSH-1/MSH-2 define the delimiters and must not be escaped
+        msg = hl7.parse("MSH|^~\\&|\r")
+        msg["MSH.1"] = "|"
+        msg["MSH.2"] = "^~\\&"
+        self.assertEqual(str(msg), "MSH|^~\\&|\r")
+
+    def test_messages_in_batch_keep_own_separator_rules(self):
+        # Two messages with different delimiter sets in one batch must each
+        # retain their own character rules across modification and serialization
+        m1 = "MSH|^~\\&|SENDER1\rPID||a~b\r"
+        m2 = "MSH$%#/!$SENDER2\rPID$x#y\r"
+        batch = hl7.parse_batch("BHS|^~\\&|\r" + m1 + m2 + "BTS|2\r")
+        self.assertEqual(batch[0].separators, "\r|~^&")
+        self.assertEqual(batch[0].esc, "\\")
+        self.assertEqual(batch[1].separators, "\r$#%!")
+        self.assertEqual(batch[1].esc, "/")
+        batch[0]["PID.3"] = "p|q"
+        batch[1]["PID.3"] = "p$q"
+        # PID.3 is assigned where PID.2 was absent, so an empty field pads the
+        # gap and the hierarchical position is preserved
+        self.assertEqual(str(batch[0]), "MSH|^~\\&|SENDER1\rPID||a~b|p\\F\\q\r")
+        self.assertEqual(str(batch[1]), "MSH$%#/!$SENDER2\rPID$x#y$$p/F/q\r")
 
     def test_unescape(self):
         msg = hl7.parse(rep_sample_hl7)

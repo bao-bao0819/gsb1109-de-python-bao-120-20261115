@@ -18,6 +18,10 @@ Changelog
   float value.
 * Use `socket.sendall` to flush the MLLP buffer. `python-hl7#41 <https://github.com/johnpaulett/python-hl7/issues/41>`_.
  Thanks `Feenes <https://github.com/feenes>`_!`
+* :py:meth:`hl7.Message.assign_field` now escapes assigned string values using the
+  message's own separator and escape characters, so delimiter characters inside a
+  value are serialized as escape sequences instead of being reinterpreted as
+  structural delimiters. MSH-1/MSH-2 (and BHS/FHS equivalents) remain verbatim.
 
 
 0.4.5 - March 2022
