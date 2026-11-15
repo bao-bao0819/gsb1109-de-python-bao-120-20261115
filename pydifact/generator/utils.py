@@ -1,0 +1,54 @@
+import os
+import sys
+from pathlib import Path
+
+import requests
+
+
+def is_prehistoric(release: str) -> bool:
+    """Returns True if the release is pre-historic (<99)"""
+    return release == "99A" or (release[:2].isdigit() and 80 < int(release[:2]) < 99)
+
+
+def download_file(url: str, output_file_path: os.PathLike | str) -> bool:
+    """Download a file from a URL and save it to a local file.
+
+    Returns:
+        True if the file was downloaded successfully, False if it already exists.
+    Raises:
+        RequestException: If the download fails.
+    """
+    output_file_path = os.path.abspath(output_file_path)
+    if os.path.exists(output_file_path):
+        print(f"'{output_file_path}' already exists. Skipping download.")
+        return False
+
+    if url.startswith("internal://"):
+        internal_path = url[11:]  # remove "internal://" prefix
+        if not os.path.exists(output_file_path):
+            os.symlink(
+                Path(__file__).parent / "internal" / internal_path,
+                output_file_path,
+            )
+        return False
+
+    # Only allow downloads over TLS. Plain HTTP can be transparently
+    # intercepted (MITM), and the downloaded archive is extracted on disk,
+    # so an attacker-controlled response could otherwise write arbitrary
+    # files (see _expand_zip / Zip Slip protection).
+    if not url.startswith("https://"):
+        raise ValueError(f"Refusing to download over insecure URL: {url}")
+
+    response = requests.get(url, stream=True, timeout=30)
+    if response.status_code == 403:  # Forbidden
+        print(f"Cound not download {url} to '{output_file_path}', as it is forbidden.")
+        print("Maybe there is a captcha on the page.")
+        print("Please manually download the file and place it into the zips folder.")
+        sys.exit(1)
+
+    response.raise_for_status()  # check if the request was successful
+    with open(output_file_path, "wb") as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            if chunk:  # filter out keep-alive new chunks
+                f.write(chunk)
+    return True

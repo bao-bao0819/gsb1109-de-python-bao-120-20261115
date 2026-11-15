@@ -1,0 +1,216 @@
+# pydifact
+
+[![Tests](https://github.com/nerdocs/pydifact/actions/workflows/unittests.yml/badge.svg)](https://github.com/nerdocs/pydifact/actions/workflows/unittests.yml)
+[![Python Version](https://img.shields.io/python/required-version-toml?tomlFilePath=https://raw.githubusercontent.com/nerdocs/pydifact/master/pyproject.toml)](https://github.com/nerdocs/pydifact/blob/master/pyproject.toml)
+
+A Python library to parse and serialize UN/EDIFACT interchanges.
+
+## Preamble
+
+This is a port of [metroplex-systems/edifact](https://github.com/metroplex-systems/edifact) to Python. Thanks here at the start to [Craig Duncan](https://github.com/duncan3dc) for this cool piece of software. Porting was like a breeze due to the high code quality there. All credits for the initial code here go to him, I just did the translation to Python(3), some "pythonifications" of the code and little improvements.
+
+### Why another EDIFACT library?
+
+Because I did not find a decent UN/EDIFACT library for Python, so I decided to port one of the available good PHP libraries to Python. Here is the result.
+
+ATM this is a Work In Progress, the API is not stable yet.
+Feel free to help.
+
+## Install
+
+```bash
+uv pip install pydifact
+# or
+python -m pip install pydifact
+```
+
+However, it is not marked as stable yet, so the pypi version, including documentation and code examples, could differ 
+from the latest git code. If in doubt, use the git version. You should use uv for the development process:
+```bash
+git clone https://github.com/nerdocs/pydifact.git
+cd pydifact
+uv sync
+```
+
+
+## Usage
+
+To read a full Interchange from a file or string, take the `Interchange` class and
+iter over the messages and segments:
+
+```python
+from pydifact.segmentcollection import Interchange
+
+interchange = Interchange.from_file("./tests/data/wikipedia.edi")
+interchange = Interchange.from_str(
+    "UNA:+,? '"
+    "UNB+UNOC:1+1234+3333+200102:2212+42'"
+    "UNH+42z42+PAORES:93:1:IA'"
+    "MSG+1:45'"
+    "IFT+3+XYZCOMPANY AVAILABILITY'"
+    "ERC+A7V:1:AMD'"
+    "UNT+5+42z42'UNZ+2+42'"
+)
+for message in interchange.get_messages():
+    for segment in message.segments:
+        print(f"Segment tag: {segment.tag}, content: {segment.elements}")
+```
+
+You may also want to iterate directly on segments :
+
+```python
+from pydifact.segmentcollection import Interchange
+
+interchange = Interchange.from_str(
+    "UNA:+,? '"
+    "UNB+UNOC:1+1234+3333+200102:2212+42'"
+    "UNH+42z42+PAORES:93:1:IA'"
+    "MSG+1:45'"
+    "IFT+3+XYZCOMPANY AVAILABILITY'"
+    "ERC+A7V:1:AMD'"
+    "UNT+5+42z42'UNZ+2+42'"
+)
+
+for segment in interchange.segments:
+    print(f"Segment tag: {segment.tags}, content: {segment.elements}")
+```
+
+Or you can create an EDI interchange on the fly:
+
+```python
+from pydifact.segmentcollection import Interchange
+from pydifact.segments import Segment
+
+interchange = Interchange(
+    syntax_identifier=("IBMA", 1),
+    sender="MeMyselfAndIrene",
+    recipient="TheOtherOne",
+    control_reference="KLuzs7c6",
+)
+interchange.add_segment(Segment("QTY", ["12", "3"]))
+
+print(interchange.serialize())
+```
+
+To include or override the Service String Advice segment (`UNA`), just specify it as a regular segment:
+
+```python
+interchange.add_segment(Segment("UNA", ":+.? '"))
+```
+
+You may also want to parse a « raw » segment bunch which is not an interchange:
+
+```python
+from pydifact.segmentcollection import RawSegmentCollection
+
+collection = RawSegmentCollection.from_str("UNH+1+ORDERS:D:96A:UN:EAN008'")
+
+for segment in collection.segments:
+    print(f"Segment tag: {segment.tags}, content: {segment.elements}")
+```
+
+By default, the segments (and the `UNB` header of an interchange) are validated
+against the EDIFACT specifications while parsing. For files that don't strictly
+adhere to them, validation can be switched off:
+
+```python
+interchange = Interchange.from_file("./tests/data/wikipedia_en.edi", validate=False)
+collection = RawSegmentCollection.from_str(
+    "UNH+1+ORDERS:D:96A:UN:EAN008'", validate=False
+)
+```
+
+If you pass your own `Parser`, create it with `Parser(validate=False)` to skip the
+segment validation.
+
+Some deviations from the specification are accepted anyway, e.g. content in front
+of the `UNA` segment or leading whitespace. Each of them emits a
+`NonConformantEDIWarning`, which can be switched off with
+`warn_non_conformant=False` (on `Parser`, `from_str()` and `from_file()`) or a
+standard `warnings` filter.
+
+
+## Limitations
+
+- No support of optional functional groups (`UNG`→`UNE`),
+
+## Alternatives
+
+In the Python ecosystem:
+
+- [python-edifact](https://github.com/FriedrichK/python-edifact) - simpler, IMHO less clean code, less flexible. may be faster though (not tested). Seems unmaintained.
+- [bots](https://github.com/bots-edi/bots) - huge, with webinterface (bots-monitor), webserver, bots-engine.
+- [edicat](https://github.com/notpeter/edicat) - simple, only for separating lines/segments for CLI-piping.
+
+## Development
+
+### Setup
+
+To develop pydifact, clone the repository and install the dev requirements:
+
+```bash
+uv sync
+```
+
+This installs all the python packages needed for development and testing.
+
+### Code formatting
+
+Format all python files and sort imports using [ruff](https://docs.astral.sh/ruff/)
+before committing:
+
+```bash
+uv run ruff format .
+uv run ruff check --fix .
+```
+
+Happy coding, PR are more than welcome to make this library better, or to add a feature that matches your needs.
+Nevertheless, don't forget adding tests for every aspect you add in code.
+
+### Testing
+
+pydifact uses [pytest](http://pytest.org) for testing. There is a shortcut in the Makefile for your convenience:
+
+```bash
+make test
+```
+
+This is recommended for faster testing.
+
+
+There are some additional tests to check the performance of parsing huge files - you can include that tests by calling
+
+```bash
+make test-extended
+```
+
+To run the tests against all supported Python versions (the same matrix as in CI), use
+
+```bash
+make test-all
+```
+
+The list of supported versions is declared once, as `Programming Language :: Python :: 3.X` classifiers in
+`pyproject.toml`; both `make test-all` and the CI matrix read it from there.
+
+## Credits
+The official formats for UN/EDIFAT provided by UN Secretariat are raw text files located [here](http://www.unece.org/tradewelcome/un-centre-for-trade-facilitation-and-e-business-uncefact/outputs/standards/unedifact/directories/download.html) and 
+html (.htm) files located [here](http://www.unece.org/tradewelcome/un-centre-for-trade-facilitation-and-e-business-uncefact/outputs/standards/unedifact/directories/2011-present.html), similarly for service codes as text and html files located at https://www.gefeg.com/jswg/.
+
+There are many other helpful projects and people who made this possible:
+* [untid-parser](https://github.com/php-edifact/untdid-parser) by [Stefano](https://github.com/sabas) - thanks for your help.
+
+For a contributors' list, see [Contributors](https://github.com/nerdocs/pydifact/graphs/contributors).
+
+## Sponsor
+
+If you want to support the project, consider becoming a sponsor on [GitHub Sponsors](https://github.com/sponsors/nerdocs).
+Or buy me a "coffee" at [Buy me a coffee](https://buymeacoffee.com/nerdoc).
+
+If you are around Salzburg/Austria, we can meet for a real coffee too. ;-)
+
+## License
+
+This library is licensed under the
+*MIT* license, see the
+[LICENSE file](LICENSE).
