@@ -1,0 +1,3 @@
+prune docs
+prune .github
+exclude .gitignore .gitattributes .git_archival.txt tox.ini utils/test_parsing_message.py
