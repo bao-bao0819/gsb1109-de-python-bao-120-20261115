@@ -27,6 +27,16 @@ from .exceptions import (
     ParseException,
 )
 from .parser import parse, parse_batch, parse_file, parse_hl7
+from .results import (
+    DuplicateResultError,
+    InvalidResultError,
+    ResultChain,
+    ResultError,
+    ResultRegistry,
+    ResultStatus,
+    ResultVersion,
+    UnknownTargetError,
+)
 from .util import generate_message_control_id, isbatch, isfile, ishl7, split_file
 
 __version__ = "0.4.6.dev0"
@@ -66,4 +76,12 @@ __all__ = [
     "MalformedFileException",
     "MalformedSegmentException",
     "ParseException",
+    "ResultStatus",
+    "ResultVersion",
+    "ResultChain",
+    "ResultRegistry",
+    "ResultError",
+    "DuplicateResultError",
+    "UnknownTargetError",
+    "InvalidResultError",
 ]

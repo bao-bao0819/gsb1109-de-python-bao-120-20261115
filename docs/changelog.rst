@@ -18,6 +18,11 @@ Changelog
   float value.
 * Use `socket.sendall` to flush the MLLP buffer. `python-hl7#41 <https://github.com/johnpaulett/python-hl7/issues/41>`_.
  Thanks `Feenes <https://github.com/feenes>`_!`
+* Added :class:`hl7.results.ResultRegistry` and :class:`hl7.results.ResultChain`
+  to keep the full version history of laboratory results (preliminary, final,
+  correction and cancellation), keyed by order and observation, with idempotent
+  duplicate handling, conflict detection for unordered corrections and
+  branch-aware withdrawals.
 
 
 0.4.5 - March 2022

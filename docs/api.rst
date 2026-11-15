@@ -65,6 +65,27 @@ Data Types
    :members:
 
 
+Result History Chains
+---------------------
+
+.. autoclass:: hl7.ResultStatus
+   :members:
+
+.. autoclass:: hl7.ResultVersion
+   :members:
+
+.. autoclass:: hl7.ResultChain
+   :members: history, get, contains, lineage, effective_versions, effective, is_cancelled, has_conflict, cancelled_by
+
+.. autoclass:: hl7.ResultRegistry
+   :members: add, chain, chains, history, effective
+
+.. autoclass:: hl7.ResultError
+.. autoclass:: hl7.DuplicateResultError
+.. autoclass:: hl7.UnknownTargetError
+.. autoclass:: hl7.InvalidResultError
+
+
 MLLP Network Client
 -------------------
 
