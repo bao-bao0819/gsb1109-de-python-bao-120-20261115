@@ -96,6 +96,16 @@ version of the Table of Contents. `html` contains the fully rendered HTML
 content of the heading and has not been sanitized in any way. This may be used
 with your own custom sanitation to create custom table of contents.
 
+Two additional attributes describe the resolution of legacy anchors:
+
+* `toc_anchor_aliases` is a mapping of legacy anchors to the actual heading ids
+  they were rewritten to. Only anchors which needed rewriting and could be
+  resolved safely appear here.
+* `toc_anchor_conflicts` is a list of records for anchors which could not be
+  bound unambiguously. Each record names the `anchor`, a `reason`, and the
+  relevant ids (for example a `fallback` id or the disagreeing `target`s).
+  Links for these anchors are left untouched.
+
 ### Custom Labels
 
 In most cases, the text label in the Table of Contents should match the text of
@@ -235,6 +245,57 @@ The following options are provided to configure the output:
     `toc_depth` to `"2-6"`, the *first* headline will be `<h3>` and so still
     included in the Table of Contents. To exclude this first level, you
     have to set `toc_depth` to `"4-6"`.
+
+* **`slug_mapping`**:
+    A mapping of legacy anchors to the anchors of new, same-name sections.
+    Defaults to an empty mapping.
+
+    This supports documents where a new section is inserted ahead of an
+    existing section with the same title. Each key is the anchor a heading's
+    title would naturally produce; the value is the anchor assigned to the
+    inserted section. The original section keeps its natural anchor, so links
+    which already use it keep resolving, while the inserted section receives
+    the mapped anchor:
+
+    ```pycon
+    >>> text = '''
+    ... # Installation
+    ...
+    ... # Installation'''
+    >>> html = markdown.markdown(
+    ...     text,
+    ...     extensions=[TocExtension(slug_mapping={'installation': 'installation-v2'})]
+    ... )
+    >>> print(html)
+    <h1 id="installation-v2">Installation</h1>
+    <h1 id="installation">Installation</h1>
+    ```
+
+    When a legacy anchor no longer matches any real id, same-document fragment
+    links using it are rewritten to the mapped target. Links which already
+    resolve to an existing id, and links to other documents, are never touched.
+    A same-name heading on its own is not treated as evidence: anchors which
+    cannot be bound unambiguously are reported (see `toc_anchor_conflicts`
+    below) instead of being guessed, and their links are left unchanged.
+
+* **`anchor_attribute`**:
+    Name of the header attribute, usable together with the [Attribute Lists
+    Extension], which explicitly declares one or more whitespace-separated
+    legacy anchors for a heading. Defaults to `data-toc-anchor`. Set to an
+    empty string to disable.
+
+    [Attribute Lists Extension]: attr_list.md
+
+    The attribute is removed from the rendered heading. Every anchor listed is
+    treated as explicit evidence pointing at that heading, and fragment links
+    using those anchors are rewritten to the heading's actual id:
+
+    ```pycon
+    >>> text = '# Legacy Topic { #new-topic data-toc-anchor="legacy-topic" }'
+    >>> html = markdown.markdown(text, extensions=[TocExtension(), 'attr_list'])
+    >>> print(html)
+    <h1 id="new-topic">Legacy Topic</h1>
+    ```
 
 A trivial example:
 

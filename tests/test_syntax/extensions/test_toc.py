@@ -1611,3 +1611,279 @@ class TestTOCWithAttrList(TestCase):
             '</div>\n'
             '<h1 id="heading-one">Heading One</h1>'
         )
+
+
+class TestTOCAnchorAliases(TestCase):
+    """ Inserted same-name sections, legacy anchors and fragment rewriting. """
+
+    maxDiff = None
+
+    def testInsertedSectionKeepsOriginalAnchor(self):
+        # The mapping gives the inserted section a new anchor; the original
+        # keeps the natural one, so an existing fragment link still resolves.
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # Installation
+
+                New guide.
+
+                # Installation
+
+                Original. [old](#installation).
+                '''
+            ),
+            self.dedent(
+                '''
+                <h1 id="installation-v2">Installation</h1>
+                <p>New guide.</p>
+                <h1 id="installation">Installation</h1>
+                <p>Original. <a href="#installation">old</a>.</p>
+                '''
+            ),
+            expected_attrs={
+                'toc_anchor_aliases': {},
+                'toc_anchor_conflicts': [],
+            },
+            extensions=[TocExtension(slug_mapping={'installation': 'installation-v2'}), 'attr_list']
+        )
+
+    def testMappingRewritesFragmentWhenNaturalAnchorIsGone(self):
+        # With a single renamed section the natural anchor no longer exists, so
+        # the old fragment is rewritten to the mapped target.
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # API
+
+                new.
+
+                # Guide { #guide }
+
+                see [api old](#api).
+                '''
+            ),
+            self.dedent(
+                '''
+                <h1 id="api-v2">API</h1>
+                <p>new.</p>
+                <h1 id="guide">Guide</h1>
+                <p>see <a href="#api-v2">api old</a>.</p>
+                '''
+            ),
+            expected_attrs={
+                'toc_anchor_aliases': {'api': 'api-v2'},
+                'toc_anchor_conflicts': [],
+            },
+            extensions=[TocExtension(slug_mapping={'api': 'api-v2'}), 'attr_list']
+        )
+
+    def testDuplicateHeadingWithoutEvidenceConflicts(self):
+        # Same-name headings alone are no evidence for which one owns the
+        # legacy anchor: historic ids are kept and a conflict is recorded.
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # Header
+
+                # Header
+                '''
+            ),
+            self.dedent(
+                '''
+                <h1 id="header">Header</h1>
+                <h1 id="header_1">Header</h1>
+                '''
+            ),
+            expected_attrs={
+                'toc_anchor_aliases': {},
+                'toc_anchor_conflicts': [{
+                    'anchor': 'header',
+                    'reason': 'unresolved duplicate heading',
+                    'fallback': 'header_1',
+                }],
+            },
+            extensions=[TocExtension(), 'attr_list']
+        )
+
+    def testExplicitAnchorAttributeAliasesHeading(self):
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # Legacy Topic { #new-topic data-toc-anchor="legacy-topic" }
+
+                [old ref](#legacy-topic) [external](x.html#legacy-topic)
+                '''
+            ),
+            self.dedent(
+                '''
+                <h1 id="new-topic">Legacy Topic</h1>
+                <p><a href="#new-topic">old ref</a> '''
+                '''<a href="x.html#legacy-topic">external</a></p>
+                '''
+            ),
+            expected_attrs={
+                'toc_anchor_aliases': {'legacy-topic': 'new-topic'},
+                'toc_anchor_conflicts': [],
+            },
+            extensions=[TocExtension(), 'attr_list']
+        )
+
+    def testExplicitAnchorAttributeAcceptsMultipleAnchors(self):
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # Foo { data-toc-anchor="legacy-foo old-foo" }
+
+                [a](#legacy-foo) [b](#old-foo)
+                '''
+            ),
+            self.dedent(
+                '''
+                <h1 id="foo">Foo</h1>
+                <p><a href="#foo">a</a> <a href="#foo">b</a></p>
+                '''
+            ),
+            expected_attrs={
+                'toc_anchor_aliases': {'legacy-foo': 'foo', 'old-foo': 'foo'},
+                'toc_anchor_conflicts': [],
+            },
+            extensions=[TocExtension(), 'attr_list']
+        )
+
+    def testExplicitNaturalIdResolvesDuplicate(self):
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # X
+
+                # X { #x }
+                '''
+            ),
+            self.dedent(
+                '''
+                <h1 id="x_1">X</h1>
+                <h1 id="x">X</h1>
+                '''
+            ),
+            expected_attrs={
+                'toc_anchor_aliases': {},
+                'toc_anchor_conflicts': [],
+            },
+            extensions=[TocExtension(), 'attr_list']
+        )
+
+    def testDuplicateExplicitAnchorConflicts(self):
+        # Two headings claim the same legacy anchor: the fragment is left
+        # untouched and the disagreement is reported.
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                # Foo { data-toc-anchor="legacy-foo" }
+
+                # Foo { data-toc-anchor="legacy-foo" }
+
+                [a](#legacy-foo)
+                '''
+            ),
+            self.dedent(
+                '''
+                <h1 id="foo">Foo</h1>
+                <h1 id="foo_1">Foo</h1>
+                <p><a href="#legacy-foo">a</a></p>
+                '''
+            ),
+            expected_attrs={
+                'toc_anchor_aliases': {},
+                'toc_anchor_conflicts': [
+                    {
+                        'anchor': 'legacy-foo',
+                        'reason': 'duplicate explicit anchor',
+                        'target': 'foo',
+                        'other': 'foo_1',
+                    },
+                    {
+                        'anchor': 'foo',
+                        'reason': 'unresolved duplicate heading',
+                        'fallback': 'foo_1',
+                    },
+                ],
+            },
+            extensions=[TocExtension(), 'attr_list']
+        )
+
+    def testMappedAnchorOccupiedByOtherElementConflicts(self):
+        self.assertMarkdownRenders(
+            self.dedent(
+                '''
+                A paragraph.
+                { #reserved-v2 }
+
+                # Reserved
+
+                # Reserved
+                '''
+            ),
+            self.dedent(
+                '''
+                <p id="reserved-v2">A paragraph.</p>
+                <h1 id="reserved">Reserved</h1>
+                <h1 id="reserved_1">Reserved</h1>
+                '''
+            ),
+            expected_attrs={
+                'toc_anchor_aliases': {},
+                'toc_anchor_conflicts': [
+                    {
+                        'anchor': 'reserved',
+                        'reason': 'mapped anchor already in use',
+                        'target': 'reserved-v2',
+                        'fallback': 'reserved',
+                    },
+                    {
+                        'anchor': 'reserved',
+                        'reason': 'mapped anchor already in use',
+                        'target': 'reserved-v2',
+                        'fallback': 'reserved_1',
+                    },
+                ],
+            },
+            extensions=[
+                TocExtension(slug_mapping={'reserved': 'reserved-v2'}),
+                'attr_list',
+            ]
+        )
+
+    def testInlineFormattingExcludedFromAnchor(self):
+        # Formatting marks never enter the anchor, while the rendered title
+        # keeps them.
+        self.assertMarkdownRenders(
+            '# *Foo* **Bar** `code`\n\n[link](#foo-bar-code)',
+            '<h1 id="foo-bar-code"><em>Foo</em> <strong>Bar</strong> '
+            '<code>code</code></h1>\n'
+            '<p><a href="#foo-bar-code">link</a></p>',
+            expected_attrs={'toc_anchor_conflicts': []},
+            extensions=[TocExtension(), 'attr_list']
+        )
+
+    def testDisabledAnchorAttributeIsIgnored(self):
+        self.assertMarkdownRenders(
+            "# Q { data-toc-anchor='legacy-q' }\n\n[x](#legacy-q)",
+            '<h1 data-toc-anchor="legacy-q" id="q">Q</h1>\n'
+            '<p><a href="#legacy-q">x</a></p>',
+            expected_attrs={
+                'toc_anchor_aliases': {},
+                'toc_anchor_conflicts': [],
+            },
+            extensions=[TocExtension(anchor_attribute=''), 'attr_list']
+        )
+
+    def testResetClearsAnchorState(self):
+        md = Markdown(extensions=[TocExtension(slug_mapping={'a': 'a-v2'}), 'attr_list'])
+        md.convert('# A\n\n# A')
+        self.assertEqual(md.toc_anchor_aliases, {})
+        md.reset()
+        self.assertEqual(md.toc_anchor_aliases, {})
+        self.assertEqual(md.toc_anchor_conflicts, [])
+        self.assertEqual(md.toc, '')
+        self.assertEqual(md.toc_tokens, [])

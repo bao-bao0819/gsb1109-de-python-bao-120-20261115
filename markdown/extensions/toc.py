@@ -54,6 +54,206 @@ def slugify_unicode(value: str, separator: str) -> str:
 IDCOUNT_RE = re.compile(r'^(.*)_([0-9]+)$')
 
 
+class AnchorRegistry:
+    """ Track heading ids and the legacy anchors which alias them.
+
+    A knowledge base may insert a new section carrying the same title ahead of
+    the original one. The original section must keep the anchor derived from
+    its title so that existing links keep resolving, while the inserted
+    section needs a different anchor.
+
+    Two kinds of evidence are accepted when binding a legacy anchor:
+
+    * Explicit evidence: an explicit id (or `data-toc-anchor` attribute) on a
+      heading. Explicit evidence always wins.
+    * Inferred evidence: the configured old-to-new `slug_mapping`, applied to
+      the id a heading's title would naturally produce.
+
+    A same-name heading on its own is no evidence. When an anchor cannot be
+    bound safely, the disagreement is recorded in `conflicts` rather than
+    guessed, and links using it are left untouched.
+
+    Resolution happens in two phases. `plan` records every heading and reserves
+    explicitly declared ids up front, so a heading cannot steal an anchor an
+    earlier or later heading explicitly owns. `finalize` then assigns the
+    remaining ids and builds the alias table.
+    """
+
+    def __init__(
+        self,
+        used_ids: MutableSet[str],
+        slugify,
+        separator: str,
+        id_counters: dict[str, int] | None = None,
+        slug_mapping: dict[str, str] | None = None,
+    ):
+        self.used_ids = used_ids
+        self.slugify = slugify
+        self.separator = separator
+        self.id_counters = id_counters if id_counters is not None else {}
+        self.slug_mapping = slug_mapping or {}
+        # Planned headings in document order, each holding its evidence and id.
+        self._headings: list[dict[str, Any]] = []
+        # Legacy anchors finalized to a safe rewrite target.
+        self.aliases: dict[str, str] = {}
+        # Structured records of anchors which could not be bound safely.
+        self.conflicts: list[dict[str, str]] = []
+
+    def slug(self, name: str) -> str:
+        return self.slugify(html.unescape(name), self.separator)
+
+    def _conflict(self, anchor: str, reason: str, **details: str) -> None:
+        record = {'anchor': anchor, 'reason': reason}
+        record.update(details)
+        if record not in self.conflicts:
+            self.conflicts.append(record)
+
+    def _set_explicit_claim(
+        self, claims: dict[str, str], anchor: str, target_id: str
+    ) -> None:
+        """ Record an explicit anchor binding, flagging disagreement. """
+        if not anchor:
+            return
+        existing = claims.get(anchor)
+        if existing is not None and existing != target_id:
+            self._conflict(
+                anchor, 'duplicate explicit anchor',
+                target=existing, other=target_id,
+            )
+        else:
+            claims[anchor] = target_id
+
+    def plan(
+        self,
+        name: str,
+        explicit_id: str | None = None,
+        aliases: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """ Record a heading and reserve its explicit id immediately. """
+        natural = self.slug(name)
+        entry: dict[str, Any] = {
+            'natural': natural,
+            'mapped': self.slug_mapping.get(natural),
+            'explicit_id': explicit_id,
+            'aliases': tuple(aliases),
+            'id': None,
+        }
+        if explicit_id:
+            if explicit_id in self.used_ids:
+                # Two headings (or a heading and another element) claim one id;
+                # nothing says which is the original section, so keep a unique
+                # fallback and flag the disagreement.
+                entry['id'] = unique(explicit_id, self.used_ids, self.id_counters)
+                self._conflict(
+                    explicit_id, 'duplicate explicit id', fallback=entry['id'],
+                )
+            else:
+                entry['id'] = explicit_id
+                self.used_ids.add(explicit_id)
+        self._headings.append(entry)
+        return entry
+
+    def finalize(self) -> None:
+        """ Assign every id and resolve evidence into safe aliases. """
+        # Ownership of a heading's natural anchor, proven by an explicit id.
+        explicit_claims: dict[str, str] = {}
+        # Direct `data-toc-anchor` instructions, which must be honored or flagged.
+        alias_claims: dict[str, str] = {}
+        # Anchors inferred from `slug_mapping` plus document order.
+        inferred_claims: dict[str, str] = {}
+        self_assigned_mapped: set[str] = set()
+        explicit_owned = {
+            entry['explicit_id']
+            for entry in self._headings if entry['explicit_id']
+        }
+
+        # Assign ids to headings without an explicit id, in document order.
+        for entry in self._headings:
+            natural = entry['natural']
+            mapped = entry['mapped']
+            if entry['id'] is not None:
+                heading_id = entry['id']
+            elif mapped is not None and mapped not in self.used_ids:
+                # The first same-name (inserted) section takes the new anchor,
+                # leaving the natural anchor free for the original section.
+                heading_id = mapped
+                self.used_ids.add(mapped)
+                self_assigned_mapped.add(mapped)
+                inferred_claims.setdefault(natural, mapped)
+            else:
+                # No usable evidence for a new anchor: retain historic
+                # deduplication rather than stealing another section's anchor.
+                heading_id = unique(natural, self.used_ids, self.id_counters)
+                self.used_ids.add(heading_id)
+                if mapped is not None:
+                    if (
+                        mapped in self.used_ids
+                        and mapped not in self_assigned_mapped
+                        and mapped not in explicit_owned
+                    ):
+                        # The mapped anchor belongs to an unrelated element.
+                        self._conflict(
+                            natural, 'mapped anchor already in use',
+                            target=mapped, fallback=heading_id,
+                        )
+                    inferred_claims.setdefault(natural, mapped)
+            entry['id'] = heading_id
+
+            # Explicit evidence from the heading itself. A mapping connects the
+            # natural anchor to this heading; an id equal to the natural slug
+            # declares outright that the heading owns that anchor.
+            if entry['explicit_id'] and (
+                mapped is not None or entry['explicit_id'] == natural
+            ):
+                self._set_explicit_claim(explicit_claims, natural, heading_id)
+            for alias in entry['aliases']:
+                self._set_explicit_claim(alias_claims, alias, heading_id)
+
+        # Same-name headings without any evidence binding their natural anchor
+        # cannot be told apart, so leave a conflict instead of guessing.
+        counts: dict[str, int] = {}
+        for entry in self._headings:
+            counts[entry['natural']] = counts.get(entry['natural'], 0) + 1
+        evidenced = set(explicit_claims) | set(inferred_claims)
+        for natural, count in counts.items():
+            if count > 1 and natural not in evidenced:
+                fallback = max(
+                    entry['id'] for entry in self._headings
+                    if entry['natural'] == natural
+                )
+                self._conflict(
+                    natural, 'unresolved duplicate heading', fallback=fallback,
+                )
+
+        # Build the alias table, dropping anchors which are unsafe to rewrite.
+        conflicted = {record['anchor'] for record in self.conflicts}
+        claims = dict(inferred_claims)
+        claims.update(explicit_claims)
+        claims.update(alias_claims)
+        for anchor, target_id in claims.items():
+            if anchor in conflicted:
+                continue
+            if anchor in self.used_ids:
+                # The legacy anchor is still a real id, so links resolve
+                # directly. A direct alias pointing elsewhere cannot be
+                # honored; derived natural/mapping claims are simply moot.
+                if alias_claims.get(anchor) not in (None, anchor):
+                    self._conflict(
+                        anchor, 'anchor is also an existing id', target=target_id,
+                    )
+                continue
+            if target_id not in self.used_ids:
+                self._conflict(anchor, 'target section not found', target=target_id)
+                continue
+            self.aliases[anchor] = target_id
+
+    def resolve_fragment(self, fragment: str) -> str | None:
+        """ Return the rewrite target for a fragment, or `None` to keep it. """
+        if not fragment or fragment in self.used_ids or fragment not in self.aliases:
+            return None
+        return self.aliases[fragment]
+
+
 def unique(id: str, ids: MutableSet[str], counters: dict[str, int] | None = None) -> str:
     """ Ensure id is unique in set of ids. Append '_1', '_2'... if not
 
@@ -279,6 +479,8 @@ class TocTreeprocessor(Treeprocessor):
         self.permalink_class: str = config["permalink_class"]
         self.permalink_title: str = config["permalink_title"]
         self.permalink_leading: bool | None = parseBoolValue(config["permalink_leading"], False)
+        self.slug_mapping: dict[str, str] = config["slug_mapping"]
+        self.anchor_attribute: str = config["anchor_attribute"]
         self.header_rgx = re.compile("[Hh][123456]")
         if isinstance(config["toc_depth"], str) and '-' in config["toc_depth"]:
             self.toc_top, self.toc_bottom = [int(x) for x in config["toc_depth"].split('-')]
@@ -384,49 +586,92 @@ class TocTreeprocessor(Treeprocessor):
 
         return div
 
-    def run(self, doc: etree.Element) -> None:
-        # Get a list of id attributes
-        used_ids = set()
-        for el in doc.iter():
-            if "id" in el.attrib:
-                used_ids.add(el.attrib["id"])
-        id_counters: dict[str, int] = {}
+    def _split_anchor_attribute(self, el: etree.Element) -> tuple[str, ...]:
+        """ Read explicit legacy anchors declared on a heading.
 
-        toc_tokens = []
+        The attribute is whitespace separated and removed from the output,
+        mirroring how `data-toc-label` is handled.
+        """
+        raw = el.attrib.get(self.anchor_attribute)
+        if raw is None:
+            return ()
+        del el.attrib[self.anchor_attribute]
+        return tuple(anchor for anchor in unescape(raw).split() if anchor)
+
+    def _rewrite_fragment_links(self, doc: etree.Element, registry: AnchorRegistry) -> None:
+        """ Point same-document fragment links at their resolved targets. """
+        for el in doc.iter():
+            if el.tag != 'a':
+                continue
+            href = el.attrib.get('href')
+            if not href or not href.startswith('#'):
+                continue
+            fragment = unescape(href[1:])
+            target = registry.resolve_fragment(fragment)
+            if target is not None:
+                el.attrib['href'] = '#' + target
+
+    def run(self, doc: etree.Element) -> None:
+        # Collect ids of non-heading elements. Heading ids are managed by the
+        # registry itself so that a pre-existing id is not mistaken for a
+        # collision with the heading carrying it.
+        used_ids = set()
+        headings = []
         for el in doc.iter():
             if isinstance(el.tag, str) and self.header_rgx.match(el.tag):
-                self.set_level(el)
-                innerhtml = render_inner_html(remove_fnrefs(el), self.md)
-                name = strip_tags(innerhtml)
+                headings.append(el)
+            elif "id" in el.attrib:
+                used_ids.add(el.attrib["id"])
+        id_counters: dict[str, int] = {}
+        registry = AnchorRegistry(
+            used_ids, self.slugify, self.sep, id_counters, self.slug_mapping
+        )
 
-                # Do not override pre-existing ids
-                if not el.attrib.get("id"):
-                    # The `attr_list` extension writes bare attributes with a
-                    # value of None. A valueless id is no id at all, so a slug
-                    # is generated for it like for any other id-less heading.
-                    el.attrib["id"] = unique(self.slugify(html.unescape(name), self.sep), used_ids, id_counters)
+        # First pass: record headings and their evidence, reserving explicit
+        # ids before any generated id can claim them.
+        planned = []
+        for el in headings:
+            self.set_level(el)
+            innerhtml = render_inner_html(remove_fnrefs(el), self.md)
+            name = strip_tags(innerhtml)
+            explicit_aliases = self._split_anchor_attribute(el)
+            # The `attr_list` extension writes bare attributes with a
+            # value of None. A valueless id is no id at all, so a slug
+            # is generated for it like for any other id-less heading.
+            explicit_id = el.attrib.get("id") or None
+            entry = registry.plan(
+                name, explicit_id=explicit_id, aliases=explicit_aliases
+            )
+            planned.append((el, entry, innerhtml, name))
 
-                data_toc_label = ''
-                if 'data-toc-label' in el.attrib:
-                    data_toc_label = run_postprocessors(unescape(el.attrib['data-toc-label']), self.md)
-                    # Overwrite name with sanitized value of `data-toc-label`.
-                    name = escape_cdata(strip_tags(data_toc_label))
-                    # Remove the data-toc-label attribute as it is no longer needed
-                    del el.attrib['data-toc-label']
+        registry.finalize()
+        self._rewrite_fragment_links(doc, registry)
 
-                if int(el.tag[-1]) >= self.toc_top and int(el.tag[-1]) <= self.toc_bottom:
-                    toc_tokens.append({
-                        'level': int(el.tag[-1]),
-                        'id': unescape(el.attrib["id"]),
-                        'name': name,
-                        'html': innerhtml,
-                        'data-toc-label': data_toc_label
-                    })
+        toc_tokens = []
+        for el, entry, innerhtml, name in planned:
+            el.attrib["id"] = entry['id']
 
-                if self.use_anchors:
-                    self.add_anchor(el, el.attrib["id"])
-                if self.use_permalinks not in [False, None]:
-                    self.add_permalink(el, el.attrib["id"])
+            data_toc_label = ''
+            if 'data-toc-label' in el.attrib:
+                data_toc_label = run_postprocessors(unescape(el.attrib['data-toc-label']), self.md)
+                # Overwrite name with sanitized value of `data-toc-label`.
+                name = escape_cdata(strip_tags(data_toc_label))
+                # Remove the data-toc-label attribute as it is no longer needed
+                del el.attrib['data-toc-label']
+
+            if int(el.tag[-1]) >= self.toc_top and int(el.tag[-1]) <= self.toc_bottom:
+                toc_tokens.append({
+                    'level': int(el.tag[-1]),
+                    'id': unescape(el.attrib["id"]),
+                    'name': name,
+                    'html': innerhtml,
+                    'data-toc-label': data_toc_label
+                })
+
+            if self.use_anchors:
+                self.add_anchor(el, el.attrib["id"])
+            if self.use_permalinks not in [False, None]:
+                self.add_permalink(el, el.attrib["id"])
 
         toc_tokens = nest_toc_tokens(toc_tokens)
         div = self.build_toc_div(toc_tokens)
@@ -439,6 +684,8 @@ class TocTreeprocessor(Treeprocessor):
             toc = pp.run(toc)
         self.md.toc_tokens = toc_tokens
         self.md.toc = toc
+        self.md.toc_anchor_aliases = dict(registry.aliases)
+        self.md.toc_anchor_conflicts = list(registry.conflicts)
 
 
 class TocExtension(Extension):
@@ -493,6 +740,18 @@ class TocExtension(Extension):
                 'separated by a hyphen in between (`2-5`) defines the top (t) and the bottom (b) (<ht>..<hb>). '
                 'Default: `6` (bottom).'
             ],
+            'slug_mapping': [
+                {},
+                'Mapping of legacy anchors (the slug a heading would naturally get) to the anchors which '
+                'identify the new same-name sections inserted ahead of the originals. Legacy fragment links '
+                'are rewritten to the resolved targets. Default: an empty mapping.'
+            ],
+            'anchor_attribute': [
+                'data-toc-anchor',
+                'Name of the header attribute (usable via `attr_list`) which explicitly declares one or '
+                'more whitespace-separated legacy anchors for a heading. The attribute is removed from the '
+                'rendered output. Set to an empty string to disable. Default: `data-toc-anchor`.'
+            ],
         }
         """ Default configuration options. """
 
@@ -516,6 +775,8 @@ class TocExtension(Extension):
     def reset(self) -> None:
         self.md.toc = ''
         self.md.toc_tokens = []
+        self.md.toc_anchor_aliases = {}
+        self.md.toc_anchor_conflicts = []
 
 
 def makeExtension(**kwargs):  # pragma: no cover
