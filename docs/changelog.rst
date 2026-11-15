@@ -18,6 +18,14 @@ Changelog
   float value.
 * Use `socket.sendall` to flush the MLLP buffer. `python-hl7#41 <https://github.com/johnpaulett/python-hl7/issues/41>`_.
  Thanks `Feenes <https://github.com/feenes>`_!`
+* :py:meth:`hl7.Segment.assign_field` now escapes separator and escape
+  characters in assigned string values using that message's own separator
+  rules, so values containing delimiters cannot be reinterpreted as structure
+  when the message is rendered or re-parsed. The literal separator fields
+  ``MSH``/``BHS``/``FHS``-1 and -2 are still stored unescaped.
+* Fixed :py:class:`hl7.Batch` and :py:class:`hl7.File` rendering emitting an
+  extra carriage return between messages, so batches whose messages use
+  different separator characters now round-trip byte-for-byte.
 
 
 0.4.5 - March 2022

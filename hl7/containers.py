@@ -135,6 +135,17 @@ class Container(Sequence):
             )
         return sequence
 
+    def _render_children(self):
+        """Render the child containers in order.
+
+        :py:class:`hl7.Message` (and :py:class:`hl7.Batch`) instances end
+        their string representation with their separator (the carriage
+        return), so they are concatenated rather than joined. This keeps a
+        single separator between siblings and preserves every child's
+        position, including empty ones.
+        """
+        return "".join(str(child) for child in self)
+
     def __str__(self):
         return self.separator.join((str(x) for x in self))
 
@@ -220,11 +231,11 @@ class File(Container):
                 "Either both header and trailer must be present or neither"
             )
         return (
-            super().__str__()
+            self._render_children()
             if not self.header
             else str(self.header)
             + self.separator
-            + super().__str__()
+            + self._render_children()
             + str(self.trailer)
             + self.separator
         )
@@ -311,11 +322,11 @@ class Batch(Container):
                 "Either both header and trailer must be present or neither"
             )
         return (
-            super().__str__()
+            self._render_children()
             if not self.header
             else str(self.header)
             + self.separator
-            + super().__str__()
+            + self._render_children()
             + str(self.trailer)
             + self.separator
         )
@@ -729,9 +740,21 @@ class Segment(Container):
         Assign a value into a message using the tree based assignment notation.
         The segment must exist.
 
+        String values are escaped using this segment's separator rules before
+        being stored, so that separator characters contained in the value
+        cannot be reinterpreted as structural delimiters when the message is
+        rendered. The literal separator fields MSH/BHS/FHS-1 and -2 are
+        stored unescaped.
+
         Extract a field using a future proofed approach, based on rules in:
         http://wiki.medical-objects.com.au/index.php/Hl7v2_parsing
         """
+        # MSH/BHS/FHS-1 (field separator) and -2 (encoding characters) hold
+        # the separator characters literally and must never be escaped.
+        if isinstance(value, str) and not (
+            str(self[0]) in ("MSH", "BHS", "FHS") and field_num in (1, 2)
+        ):
+            value = escape(self, value)
 
         while len(self) <= field_num:
             self.append(self.create_field([]))

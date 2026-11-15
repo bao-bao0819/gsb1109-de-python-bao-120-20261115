@@ -101,6 +101,34 @@ class ParseTest(TestCase):
         self.assertIsNone(batch.header)
         self.assertIsNone(batch.trailer)
 
+    def test_batch_roundtrip(self):
+        self.assertEqual(str(hl7.parse_batch(sample_batch)), sample_batch)
+
+    def test_file_roundtrip(self):
+        self.assertEqual(str(hl7.parse_file(sample_file)), sample_file)
+
+    def test_batch_roundtrip_heterogeneous_separators(self):
+        # Two messages in the same batch use different separator characters.
+        # Each message must retain its own rules and the batch must render
+        # byte-for-byte, with a single carriage return between messages.
+        msg1 = "MSH|^~\\&|A\rPID|1||a~b\r"
+        msg2 = "MSH/#!@?/B\rPID/1//x#y\r"
+        batch = "BHS|^~\\&|\r" + msg1 + msg2 + "BTS|1\r"
+        parsed = hl7.parse_batch(batch)
+        self.assertEqual(parsed[0].separators, "\r|~^&")
+        self.assertEqual(parsed[0].esc, "\\")
+        self.assertEqual(parsed[1].separators, "\r/!#?")
+        self.assertEqual(parsed[1].esc, "@")
+        self.assertEqual(str(parsed), batch)
+        self.assertNotIn("\r\r", str(parsed))
+
+    def test_batch_without_header_keeps_single_separator(self):
+        msg1 = "MSH|^~\\&|A\rPID|1||a\r"
+        msg2 = "MSH|^~\\&|B\rPID|1||b\r"
+        parsed = hl7.parse_batch(msg1 + msg2)
+        self.assertEqual(str(parsed), msg1 + msg2)
+        self.assertNotIn("\r\r", str(parsed))
+
     def test_parse_bad_batch(self):
         with self.assertRaises(ParseException) as cm:
             hl7.parse_batch(sample_bad_batch)
@@ -355,6 +383,72 @@ class ParseTest(TestCase):
         self.assertEqual(msg2["MSH.20"], "FIELD 20")
         self.assertEqual(msg2["MSH.21.1.1"], "COMPONENT 21.1.1")
         self.assertEqual(msg2["MSH.21.1.2.4"], "SUBCOMPONENT 21.1.2.4")
+
+    def test_assign_escapes_separator_characters(self):
+        # Separator characters inside an assigned value must be escaped using
+        # this message's rules, so they cannot be reinterpreted as structure
+        # when the message is rendered or re-parsed.
+        msg = hl7.parse("MSH|^~\\&|A\rPID|1||x\r")
+        value = "a|b^c~d&e\\f"
+        msg["PID.3"] = value
+        rendered = str(msg)
+        self.assertEqual(
+            rendered,
+            "MSH|^~\\&|A\rPID|1||a\\F\\b\\S\\c\\R\\d\\T\\e\\E\\f\r",
+        )
+        # Re-parsing the rendered message recovers the original (unescaped) value
+        self.assertEqual(hl7.parse(rendered)["PID.3"], value)
+
+    def test_assign_escapes_nonstandard_separators(self):
+        # Field '/', component '#', repetition '!', escape '@', subcomponent '?'
+        msg = hl7.parse("MSH/#!@?/B\rPID/1//x\r")
+        value = "a/b#c!d?e@f"
+        msg["PID.3"] = value
+        rendered = str(msg)
+        self.assertIn("@F@", rendered)
+        self.assertIn("@S@", rendered)
+        self.assertIn("@R@", rendered)
+        self.assertIn("@T@", rendered)
+        self.assertIn("@E@", rendered)
+        self.assertEqual(hl7.parse(rendered)["PID.3"], value)
+
+    def test_assign_leaves_msh_control_fields_unescaped(self):
+        # MSH/BHS/FHS-1 and -2 hold the separator characters literally and
+        # must never be escaped.
+        msg = hl7.parse(sample_hl7)
+        msg["MSH.1"] = "|"
+        msg["MSH.2"] = "^~\\&"
+        self.assertTrue(str(msg).startswith("MSH|^~\\&"))
+
+    def test_assign_isolated_from_existing_escaped_values(self):
+        # Existing escaped separators render unchanged, and a local edit only
+        # affects the targeted leaf.
+        original = "MSH|^~\\&|A\rPID|1||a\\F\\b~c\\R\\d\r"
+        msg = hl7.parse(original)
+        self.assertEqual(str(msg), original)
+        msg["PID.3.1"] = "x|y"
+        self.assertEqual(str(msg), "MSH|^~\\&|A\rPID|1||x\\F\\y~c\\R\\d\r")
+
+    def test_empty_repetitions_and_components_preserved(self):
+        # Empty repeats/components/subcomponents keep their hierarchical
+        # position through parsing and rendering.
+        for original in (
+            "MSH|^~\\&|A\rPID|1||a~~b\r",
+            "MSH|^~\\&|A\rPID|1||a~\r",
+            "MSH|^~\\&|A\rPID|1||~a\r",
+            "MSH|^~\\&|A\rPID|1||a^^b\r",
+            "MSH|^~\\&|A\rPID|1||a&&b\r",
+            "MSH|^~\\&|A\rPID|1||a^~b\r",
+        ):
+            with self.subTest(original=original):
+                self.assertEqual(str(hl7.parse(original)), original)
+
+    def test_assign_padding_keeps_empty_repetitions(self):
+        # Assigning a high repetition number pads with empty repetitions and
+        # those empties are retained on render.
+        msg = hl7.parse("MSH|^~\\&|A\rPID|1||x\r")
+        msg["PID.3.3"] = "third"
+        self.assertEqual(str(msg), "MSH|^~\\&|A\rPID|1||x~~third\r")
 
     def test_unescape(self):
         msg = hl7.parse(rep_sample_hl7)
