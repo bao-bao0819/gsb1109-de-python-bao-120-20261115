@@ -27,7 +27,16 @@ from .exceptions import (
     ParseException,
 )
 from .parser import parse, parse_batch, parse_file, parse_hl7
-from .util import generate_message_control_id, isbatch, isfile, ishl7, split_file
+from .util import (
+    Fragment,
+    escape_fragments,
+    generate_message_control_id,
+    isbatch,
+    isfile,
+    ishl7,
+    split_file,
+    unescape_fragments,
+)
 
 __version__ = "0.4.6.dev0"
 __author__ = "John Paulett"
@@ -61,6 +70,9 @@ __all__ = [
     "split_file",
     "generate_message_control_id",
     "parse_datetime",
+    "Fragment",
+    "unescape_fragments",
+    "escape_fragments",
     "HL7Exception",
     "MalformedBatchException",
     "MalformedFileException",

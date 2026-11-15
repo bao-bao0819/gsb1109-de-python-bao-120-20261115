@@ -18,6 +18,14 @@ Changelog
   float value.
 * Use `socket.sendall` to flush the MLLP buffer. `python-hl7#41 <https://github.com/johnpaulett/python-hl7/issues/41>`_.
  Thanks `Feenes <https://github.com/feenes>`_!`
+* Added :py:func:`hl7.unescape_fragments` and :py:func:`hl7.escape_fragments`
+  (also available as :py:class:`hl7.Message` methods) to decode formatted
+  (``FT``) values into :py:class:`hl7.Fragment` text/formatting pieces and
+  encode them back.  Unknown local escapes (``\Z...\``) are preserved
+  verbatim, a decoded field separator (``\F\``) remains part of the value,
+  and the encode round trip preserves every fragment's content.
+* ``hl7.Message.escape`` now hex encodes characters above U+00FF as UTF-8
+  bytes, so non-Latin-1 text survives escaping.
 
 
 0.4.5 - March 2022

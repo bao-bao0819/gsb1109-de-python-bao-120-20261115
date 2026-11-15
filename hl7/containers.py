@@ -7,7 +7,13 @@ from .exceptions import (
     MalformedFileException,
     MalformedSegmentException,
 )
-from .util import escape, generate_message_control_id, unescape
+from .util import (
+    escape,
+    escape_fragments,
+    generate_message_control_id,
+    unescape,
+    unescape_fragments,
+)
 
 logger = logging.getLogger(__file__)
 
@@ -535,6 +541,37 @@ class Message(Container):
         *   switch code pages / ISO IR character sets
         """
         return unescape(self, field, app_map)
+
+    def unescape_fragments(self, field, app_map=None):
+        """Decode a formatted (e.g. ``FT``) field into a list of
+        :py:class:`hl7.Fragment` text and formatting pieces.
+
+        Unlike :py:meth:`hl7.Message.unescape`, which flattens the value
+        into a single string, the structured result keeps the formatting
+        instructions (highlighting, line breaks) as separate fragments and
+        preserves unknown local escapes (``\\Z...\\``) verbatim.  A decoded
+        separator (e.g. ``|`` from ``\\F\\``) remains part of a text
+        fragment and is never split into columns.
+
+        See :py:func:`hl7.unescape_fragments`.
+
+        :rtype: list of :py:class:`hl7.Fragment`
+        """
+        return unescape_fragments(self, field, app_map)
+
+    def escape_fragments(self, fragments, app_map=None):
+        """Encode a list of :py:class:`hl7.Fragment` back into an HL7
+        string, the inverse of :py:meth:`hl7.Message.unescape_fragments`.
+
+        The round trip preserves the business content of every fragment:
+        decoded separators are re-escaped (so they cannot be split into
+        columns) and unknown local escapes are emitted verbatim.
+
+        See :py:func:`hl7.escape_fragments`.
+
+        :rtype: str
+        """
+        return escape_fragments(self, fragments, app_map)
 
     def create_ack(
         self, ack_code="AA", message_id=None, application=None, facility=None

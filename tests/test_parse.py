@@ -393,6 +393,101 @@ class ParseTest(TestCase):
         self.assertEqual(msg.escape("áéíóú"), "\\Xe1\\\\Xe9\\\\Xed\\\\Xf3\\\\Xfa\\")
         self.assertEqual(msg.escape("äsdf"), "\\Xe4\\sdf")
 
+    def test_unescape_fragments(self):
+        msg = hl7.parse(rep_sample_hl7)
+
+        # A disease course summary (FT) with highlighting, a line break,
+        # hex encoded bytes, a local escape and an escaped field separator
+        field = (
+            "\\H\\入院时情况\\N\\体温 38.5\\Xe1\\ 波动\\.br\\"
+            "\\Zlocal-mark\\复查\\F\\仍在同一列"
+        )
+        fragments = msg.unescape_fragments(field)
+        self.assertEqual(
+            fragments,
+            [
+                hl7.Fragment(hl7.Fragment.FORMAT, "H"),
+                hl7.Fragment(hl7.Fragment.TEXT, "入院时情况"),
+                hl7.Fragment(hl7.Fragment.FORMAT, "N"),
+                hl7.Fragment(hl7.Fragment.TEXT, "体温 38.5á 波动"),
+                hl7.Fragment(hl7.Fragment.FORMAT, ".br"),
+                # Unknown local escape is preserved verbatim as evidence
+                hl7.Fragment(hl7.Fragment.LOCAL, "Zlocal-mark"),
+                # The decoded field separator remains part of the value
+                hl7.Fragment(hl7.Fragment.TEXT, "复查|仍在同一列"),
+            ],
+        )
+
+    def test_unescape_fragments_plain_and_empty(self):
+        msg = hl7.parse(rep_sample_hl7)
+        self.assertEqual(
+            msg.unescape_fragments("asdf"), [hl7.Fragment(hl7.Fragment.TEXT, "asdf")]
+        )
+        self.assertEqual(msg.unescape_fragments(""), [])
+
+    def test_unescape_fragments_app_map(self):
+        msg = hl7.parse(rep_sample_hl7)
+        # Application defined mappings are decoded into text
+        fragments = msg.unescape_fragments("\\H\\text\\N\\", {"H": "*", "N": "*"})
+        self.assertEqual(fragments, [hl7.Fragment(hl7.Fragment.TEXT, "*text*")])
+        # ... including mappings for local escapes
+        fragments = msg.unescape_fragments("\\Zmark\\", {"Zmark": "!"})
+        self.assertEqual(fragments, [hl7.Fragment(hl7.Fragment.TEXT, "!")])
+
+    def test_escape_fragments(self):
+        msg = hl7.parse(rep_sample_hl7)
+        fragments = [
+            hl7.Fragment(hl7.Fragment.TEXT, "a|b"),
+            hl7.Fragment(hl7.Fragment.FORMAT, "H"),
+            hl7.Fragment(hl7.Fragment.LOCAL, "Zkeep"),
+        ]
+        # The separator inside the text is re-escaped so it cannot be
+        # split into columns; the local escape is emitted verbatim
+        self.assertEqual(msg.escape_fragments(fragments), "a\\F\\b\\H\\\\Zkeep\\")
+
+    def test_escape_fragments_unknown_kind(self):
+        msg = hl7.parse(rep_sample_hl7)
+        with self.assertRaises(ValueError):
+            msg.escape_fragments([hl7.Fragment("bogus", "x")])
+
+    def test_fragments_roundtrip(self):
+        msg = hl7.parse(rep_sample_hl7)
+        field = "\\H\\入院\\N\\体温\\Xe1\\ 度\\.br\\备注\\Zlocal-mark\\列\\F\\值"
+        fragments = msg.unescape_fragments(field)
+        encoded = msg.escape_fragments(fragments)
+        # The decoded field separator is re-escaped, never a literal "|"
+        self.assertIn("\\F\\", encoded)
+        self.assertNotIn("列|值", encoded)
+        # Every fragment's business content survives the round trip
+        self.assertEqual(msg.unescape_fragments(encoded), fragments)
+
+    def test_fragments_decoded_separator_not_resplit(self):
+        msg = hl7.parse(
+            "MSH|^~\\&|A|B|C|D|202611150930||ORU^R01|1|P|2.4\r"
+            "OBX|1|FT|DCOURSE^病程摘要||首行\\F\\次行\\.br\\末行\\Zmark\\\r"
+        )
+        # The escaped \F\ does not create an extra field when parsing
+        self.assertEqual(len(msg.segment("OBX")), 6)
+        raw = str(msg.segment("OBX")(5))
+        fragments = msg.unescape_fragments(raw)
+        self.assertEqual(
+            fragments,
+            [
+                hl7.Fragment(hl7.Fragment.TEXT, "首行|次行"),
+                hl7.Fragment(hl7.Fragment.FORMAT, ".br"),
+                hl7.Fragment(hl7.Fragment.TEXT, "末行"),
+                hl7.Fragment(hl7.Fragment.LOCAL, "Zmark"),
+            ],
+        )
+        # Re-encoding and re-parsing still yields a single field
+        encoded = msg.escape_fragments(fragments)
+        rebuilt = hl7.parse(
+            "MSH|^~\\&|A|B|C|D|202611150930||ORU^R01|1|P|2.4\r"
+            "OBX|1|FT|DCOURSE^病程摘要||" + encoded + "\r"
+        )
+        self.assertEqual(len(rebuilt.segment("OBX")), 6)
+        self.assertEqual(rebuilt["OBX.5"], "首行|次行\r末行")
+
     def test_file(self):
         # Extract message from file
         self.assertTrue(hl7.isfile(sample_file))

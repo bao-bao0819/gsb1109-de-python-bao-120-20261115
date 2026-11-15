@@ -31,9 +31,16 @@ python-hl7 API
 
 .. autofunction:: hl7.parse_datetime
 
+.. autofunction:: hl7.unescape_fragments
+
+.. autofunction:: hl7.escape_fragments
+
 
 Data Types
 ----------
+
+.. autoclass:: hl7.Fragment
+   :members: TEXT, FORMAT, LOCAL
 
 .. autoclass:: hl7.Sequence
    :members: __call__
@@ -51,7 +58,7 @@ Data Types
    :members: __str__, header, trailer, create_header, create_trailer, create_file, create_batch, create_message, create_segment, create_field, create_repetition, create_component
 
 .. autoclass:: hl7.Message
-   :members: segments, segment, __getitem__, __setitem__, __str__, escape, unescape, extract_field, assign_field, create_file, create_batch, create_message, create_segment, create_field, create_repetition, create_component, create_ack
+   :members: segments, segment, __getitem__, __setitem__, __str__, escape, unescape, escape_fragments, unescape_fragments, extract_field, assign_field, create_file, create_batch, create_message, create_segment, create_field, create_repetition, create_component, create_ack
 
 .. autoclass:: hl7.Segment
 
