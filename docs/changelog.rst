@@ -4,6 +4,14 @@ Changelog
 0.4.6 - Unreleased
 ------------------
 
+* Added :py:func:`hl7.audit`, :py:func:`hl7.audit_batch`,
+  :py:func:`hl7.audit_file` and :py:func:`hl7.message_table` to reconcile the
+  ``BTS``/``FTS`` trailer counts against the messages and batches actually
+  received in a batch protocol archive. A batch whose ``BTS`` count does not
+  match is isolated on its own (``BatchTrailerMismatchException``), complete
+  empty batches are retained, and a batch with a ``BHS`` header but no ``BTS``
+  trailer is rejected via ``MissingBatchTrailerException`` rather than treated
+  as a successful zero-message batch.
 * Dropped support for Python 3.7 and 3.8. Python 3.9 - 3.13 are now supported.
 * Switched development dependencies to be installed using ``uv`` instead of ``pip``.
 * Converted packaging to ``pyproject.toml`` using ``hatchling`` and removed

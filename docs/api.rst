@@ -27,6 +27,23 @@ python-hl7 API
 
 .. autofunction:: hl7.split_file
 
+.. autofunction:: hl7.audit
+
+.. autofunction:: hl7.audit_batch
+
+.. autofunction:: hl7.audit_file
+
+.. autofunction:: hl7.message_table
+
+.. autoclass:: hl7.BatchAudit
+   :members:
+
+.. autoclass:: hl7.FileAudit
+   :members:
+
+.. autoclass:: hl7.MessageRecord
+   :members:
+
 .. autofunction:: hl7.generate_message_control_id
 
 .. autofunction:: hl7.parse_datetime

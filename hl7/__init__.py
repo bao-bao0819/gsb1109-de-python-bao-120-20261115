@@ -6,6 +6,17 @@
 """
 
 from .accessor import Accessor
+from .audit import (
+    STATUS_ACCEPTED,
+    STATUS_REJECTED,
+    BatchAudit,
+    FileAudit,
+    MessageRecord,
+    audit,
+    audit_batch,
+    audit_file,
+    message_table,
+)
 from .containers import (
     Batch,
     Component,
@@ -20,10 +31,12 @@ from .containers import (
 )
 from .datatypes import parse_datetime
 from .exceptions import (
+    BatchTrailerMismatchException,
     HL7Exception,
     MalformedBatchException,
     MalformedFileException,
     MalformedSegmentException,
+    MissingBatchTrailerException,
     ParseException,
 )
 from .parser import parse, parse_batch, parse_file, parse_hl7
@@ -44,6 +57,15 @@ __all__ = [
     "parse_hl7",
     "parse_batch",
     "parse_file",
+    "audit",
+    "audit_batch",
+    "audit_file",
+    "message_table",
+    "BatchAudit",
+    "FileAudit",
+    "MessageRecord",
+    "STATUS_ACCEPTED",
+    "STATUS_REJECTED",
     "Sequence",
     "Container",
     "File",
@@ -66,4 +88,6 @@ __all__ = [
     "MalformedFileException",
     "MalformedSegmentException",
     "ParseException",
+    "BatchTrailerMismatchException",
+    "MissingBatchTrailerException",
 ]

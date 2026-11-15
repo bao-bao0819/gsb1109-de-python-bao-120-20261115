@@ -112,6 +112,57 @@ sample_bad_batch = "\r".join(
     ]
 )
 
+# A wrapped batch whose BTS declares 2 messages while only 1 is present
+sample_batch_mismatch = "\r".join(
+    [
+        "BHS|^~\\&||ABCHS||AUSDHSV|20070101123401||||batch-mismatch",
+        "MSH|^~\\&||ABCHS||AUSDHSV|20070101112951||ADT^A04^ADT_A01|ctl-mismatch|P|2.5",
+        "EVN|A04|20060705000000",
+        "BTS|2",
+        "",
+    ]
+)
+
+# A complete but empty batch: BHS header followed by a BTS declaring zero
+sample_empty_batch = "\r".join(
+    [
+        "BHS|^~\\&||ABCHS||AUSDHSV|20070101123401||||batch-empty",
+        "BTS|0",
+        "",
+    ]
+)
+
+# A wrapped batch whose BTS count is not an integer and cannot reconcile
+sample_batch_noninteger_bts = "\r".join(
+    [
+        "BHS|^~\\&||ABCHS||AUSDHSV|20070101123401||||batch-noninteger",
+        "MSH|^~\\&||ABCHS||AUSDHSV|20070101112951||ADT^A04^ADT_A01|ctl-noninteger|P|2.5",
+        "EVN|A04|20060705000000",
+        "BTS|abc",
+        "",
+    ]
+)
+
+# A file mixing a mismatching batch, a good batch and a complete empty batch.
+# Only the first batch should be isolated; FTS correctly declares 3 batches.
+sample_audit_file = "\r".join(
+    [
+        "FHS|^~\\&||ABCHS||AUSDHSV|20070101123401|||abchs20070101123401.hl7|",
+        "BHS|^~\\&||ABCHS||AUSDHSV|20070101123401||||batch-1",
+        "MSH|^~\\&||ABCHS||AUSDHSV|20070101112951||ADT^A04^ADT_A01|ctl-1|P|2.5",
+        "EVN|A04|20060705000000",
+        "BTS|2",
+        "BHS|^~\\&||ABCHS||AUSDHSV|20070101123401||||batch-2",
+        "MSH|^~\\&||ABCHS||AUSDHSV|20070101112951||ADT^A04^ADT_A01|ctl-2|P|2.5",
+        "EVN|A04|20060705000000",
+        "BTS|1",
+        "BHS|^~\\&||ABCHS||AUSDHSV|20070101123401||||batch-3",
+        "BTS|0",
+        "FTS|3",
+        "",
+    ]
+)
+
 sample_bad_batch1 = "\r".join(
     [
         "BHS|^~\\&||ABCHS||AUSDHSV|20070101123401||||abchs20070101123401-1",
