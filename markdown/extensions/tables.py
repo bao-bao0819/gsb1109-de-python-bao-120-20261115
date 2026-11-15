@@ -35,6 +35,79 @@ PIPE_LEFT = 1
 PIPE_RIGHT = 2
 
 
+def split_row_cells(row: str) -> list[str]:
+    """ Split a row of text with some code into a list of cells. """
+    elements = []
+    pipes = []
+    tics = []
+    tic_points = []
+    tic_region = []
+    good_pipes = []
+
+    # Parse row
+    # Throw out \\, and \|
+    for m in TableProcessor.RE_CODE_PIPES.finditer(row):
+        # Store ` data (len, start_pos, end_pos)
+        if m.group(2):
+            # \`+
+            # Store length of each tic group: subtract \
+            tics.append(len(m.group(2)) - 1)
+            # Store start of group, end of group, and escape length
+            tic_points.append((m.start(2), m.end(2) - 1, 1))
+        elif m.group(3):
+            # `+
+            # Store length of each tic group
+            tics.append(len(m.group(3)))
+            # Store start of group, end of group, and escape length
+            tic_points.append((m.start(3), m.end(3) - 1, 0))
+        # Store pipe location
+        elif m.group(5):
+            pipes.append(m.start(5))
+
+    # Pair up tics according to size if possible
+    # Subtract the escape length *only* from the opening.
+    # Walk through tic list and see if tic has a close.
+    # Store the tic region (start of region, end of region).
+    pos = 0
+    tic_len = len(tics)
+    while pos < tic_len:
+        try:
+            tic_size = tics[pos] - tic_points[pos][2]
+            if tic_size == 0:
+                raise ValueError
+            index = tics[pos + 1:].index(tic_size) + 1
+            tic_region.append((tic_points[pos][0], tic_points[pos + index][1]))
+            pos += index + 1
+        except ValueError:
+            pos += 1
+
+    # Resolve pipes.  Check if they are within a tic pair region.
+    # Walk through pipes comparing them to each region.
+    #     - If pipe position is less that a region, it isn't in a region
+    #     - If it is within a region, we don't want it, so throw it out
+    #     - If we didn't throw it out, it must be a table pipe
+    for pipe in pipes:
+        throw_out = False
+        for region in tic_region:
+            if pipe < region[0]:
+                # Pipe is not in a region
+                break
+            elif region[0] <= pipe <= region[1]:
+                # Pipe is within a code region.  Throw it out.
+                throw_out = True
+                break
+        if not throw_out:
+            good_pipes.append(pipe)
+
+    # Split row according to table delimiters.
+    pos = 0
+    for pipe in good_pipes:
+        elements.append(row[pos:pipe])
+        pos = pipe + 1
+    elements.append(row[pos:])
+    return elements
+
+
 class TableProcessor(BlockProcessor):
     """ Process Tables. """
 
@@ -157,75 +230,7 @@ class TableProcessor(BlockProcessor):
 
     def _split(self, row: str) -> list[str]:
         """ split a row of text with some code into a list of cells. """
-        elements = []
-        pipes = []
-        tics = []
-        tic_points = []
-        tic_region = []
-        good_pipes = []
-
-        # Parse row
-        # Throw out \\, and \|
-        for m in self.RE_CODE_PIPES.finditer(row):
-            # Store ` data (len, start_pos, end_pos)
-            if m.group(2):
-                # \`+
-                # Store length of each tic group: subtract \
-                tics.append(len(m.group(2)) - 1)
-                # Store start of group, end of group, and escape length
-                tic_points.append((m.start(2), m.end(2) - 1, 1))
-            elif m.group(3):
-                # `+
-                # Store length of each tic group
-                tics.append(len(m.group(3)))
-                # Store start of group, end of group, and escape length
-                tic_points.append((m.start(3), m.end(3) - 1, 0))
-            # Store pipe location
-            elif m.group(5):
-                pipes.append(m.start(5))
-
-        # Pair up tics according to size if possible
-        # Subtract the escape length *only* from the opening.
-        # Walk through tic list and see if tic has a close.
-        # Store the tic region (start of region, end of region).
-        pos = 0
-        tic_len = len(tics)
-        while pos < tic_len:
-            try:
-                tic_size = tics[pos] - tic_points[pos][2]
-                if tic_size == 0:
-                    raise ValueError
-                index = tics[pos + 1:].index(tic_size) + 1
-                tic_region.append((tic_points[pos][0], tic_points[pos + index][1]))
-                pos += index + 1
-            except ValueError:
-                pos += 1
-
-        # Resolve pipes.  Check if they are within a tic pair region.
-        # Walk through pipes comparing them to each region.
-        #     - If pipe position is less that a region, it isn't in a region
-        #     - If it is within a region, we don't want it, so throw it out
-        #     - If we didn't throw it out, it must be a table pipe
-        for pipe in pipes:
-            throw_out = False
-            for region in tic_region:
-                if pipe < region[0]:
-                    # Pipe is not in a region
-                    break
-                elif region[0] <= pipe <= region[1]:
-                    # Pipe is within a code region.  Throw it out.
-                    throw_out = True
-                    break
-            if not throw_out:
-                good_pipes.append(pipe)
-
-        # Split row according to table delimiters.
-        pos = 0
-        for pipe in good_pipes:
-            elements.append(row[pos:pipe])
-            pos = pipe + 1
-        elements.append(row[pos:])
-        return elements
+        return split_row_cells(row)
 
 
 class TableExtension(Extension):

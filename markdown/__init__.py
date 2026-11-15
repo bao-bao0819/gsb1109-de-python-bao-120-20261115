@@ -33,6 +33,7 @@ Modules:
     serializers: Serializers.
     util: Utility functions.
     htmlparser: HTML parser.
+    tablerecognition: Table recognition with column roles and unit declarations.
     test_tools: Testing utilities.
     extensions: Markdown extensions.
 """
