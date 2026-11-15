@@ -161,7 +161,7 @@ What's New in Python-Markdown 2.5
     practices. See the [API] documentation for a full explanation.
 
 [ec]: ../library.md#extension_configs
-[API]: ../extensions/api.md#configsettings
+[API]: ../extensions/extension_api.md#configsettings
 
 * The [Command Line Interface][cli] now accepts a `--extensions_config` (or
   `-c`) option which accepts a file name and passes the parsed content of a

@@ -86,7 +86,10 @@ nav:
       - WikiLinks: extensions/wikilinks.md
   - Playground: playground.md
   - Development:
-    - Extension API: extensions/api.md
+    - Extension API:
+      - Writing Extensions: extensions/api.md
+      - Extension Integration: extensions/extension_api.md
+      - Extension Registries: extensions/extension_api_registries.md
     - Test Tools: test_tools.md
     - API Reference:
       - <code>markdown</code>: reference/markdown.md

@@ -215,8 +215,8 @@ class SomeExtension(markdown.extension.Extension):
 Note the call to `super` to get the benefits of configuration handling from the
 parent class. See the [documentation][config] for more information.
 
-[config]: ../extensions/api.md#configsettings
-[mext]: ../extensions/api.md#dot_notation
+[config]: ../extensions/extension_api.md#configsettings
+[mext]: ../extensions/extension_api.md#dot_notation
 
 ## What's New in Python-Markdown 2.6
 
