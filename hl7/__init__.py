@@ -26,6 +26,20 @@ from .exceptions import (
     MalformedSegmentException,
     ParseException,
 )
+from .identity import (
+    DuplicateIdentifierError,
+    EncounterAssignmentError,
+    EncounterRecord,
+    Identifier,
+    IdentityError,
+    MergeConflictError,
+    MergeNotification,
+    MergeNotFoundError,
+    PatientIdentityRegistry,
+    ReversalRecord,
+    UnknownIdentifierError,
+    identifiers_from_pid,
+)
 from .parser import parse, parse_batch, parse_file, parse_hl7
 from .util import generate_message_control_id, isbatch, isfile, ishl7, split_file
 
@@ -66,4 +80,16 @@ __all__ = [
     "MalformedFileException",
     "MalformedSegmentException",
     "ParseException",
+    "Identifier",
+    "MergeNotification",
+    "EncounterRecord",
+    "PatientIdentityRegistry",
+    "IdentityError",
+    "UnknownIdentifierError",
+    "DuplicateIdentifierError",
+    "MergeConflictError",
+    "MergeNotFoundError",
+    "EncounterAssignmentError",
+    "ReversalRecord",
+    "identifiers_from_pid",
 ]

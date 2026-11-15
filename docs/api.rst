@@ -85,3 +85,48 @@ MLLP Asyncio
    :members: writemessage
 
 .. autoclass:: hl7.mllp.InvalidBlockError
+
+
+Patient Identity Registry
+-------------------------
+
+The identity registry models an Enterprise Master Patient Index (EMPI).
+Identifiers are qualified by their assigning institution and identifier type,
+so the same number from different institutions is never merged automatically.
+Merges only happen through explicit, timestamped notifications and can be
+reversed; all relationship queries support point-in-time interpretation.
+
+.. autofunction:: hl7.identifiers_from_pid
+
+.. autoclass:: hl7.Identifier
+   :members:
+
+.. autoclass:: hl7.MergeNotification
+   :members:
+
+.. autoclass:: hl7.ReversalRecord
+   :members:
+
+.. autoclass:: hl7.EncounterRecord
+   :members:
+
+.. autoclass:: hl7.PatientIdentityRegistry
+   :members:
+
+.. autoclass:: hl7.IdentityError
+   :members:
+
+.. autoclass:: hl7.UnknownIdentifierError
+   :members:
+
+.. autoclass:: hl7.DuplicateIdentifierError
+   :members:
+
+.. autoclass:: hl7.MergeConflictError
+   :members:
+
+.. autoclass:: hl7.MergeNotFoundError
+   :members:
+
+.. autoclass:: hl7.EncounterAssignmentError
+   :members:

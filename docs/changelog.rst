@@ -4,6 +4,14 @@ Changelog
 0.4.6 - Unreleased
 ------------------
 
+* Added :class:`hl7.PatientIdentityRegistry`, an append-only patient
+  identifier relationship table. Identifiers are scoped by assigning
+  institution and identifier type, so the same number from different
+  institutions is never merged automatically. Merges are explicit,
+  timestamped notifications that can be reversed, and point-in-time queries
+  interpret history using only the notifications visible at that moment.
+  Encounters keep an immutable anchor so a later message cannot move an old
+  encounter onto another patient without evidence.
 * Dropped support for Python 3.7 and 3.8. Python 3.9 - 3.13 are now supported.
 * Switched development dependencies to be installed using ``uv`` instead of ``pip``.
 * Converted packaging to ``pyproject.toml`` using ``hatchling`` and removed
