@@ -260,6 +260,7 @@ Contents
    mllp_send
    mllp
    accessors
+   issues
    contribute
    changelog
    authors

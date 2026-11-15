@@ -24,8 +24,10 @@ from .exceptions import (
     MalformedBatchException,
     MalformedFileException,
     MalformedSegmentException,
+    MissingOccurrenceError,
     ParseException,
 )
+from .issues import FieldIssue, FieldIssueRegistry, SegmentOccurrence
 from .parser import parse, parse_batch, parse_file, parse_hl7
 from .util import generate_message_control_id, isbatch, isfile, ishl7, split_file
 
@@ -55,6 +57,10 @@ __all__ = [
     "Component",
     "Factory",
     "Accessor",
+    "SegmentOccurrence",
+    "FieldIssue",
+    "FieldIssueRegistry",
+    "MissingOccurrenceError",
     "ishl7",
     "isbatch",
     "isfile",

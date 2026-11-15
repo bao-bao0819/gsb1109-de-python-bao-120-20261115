@@ -6,6 +6,12 @@ from .exceptions import (
     MalformedBatchException,
     MalformedFileException,
     MalformedSegmentException,
+    MissingOccurrenceError,
+)
+from .issues import (
+    FieldIssueRegistry,
+    SegmentOccurrence,
+    make_occurrence_id,
 )
 from .util import escape, generate_message_control_id, unescape
 
@@ -333,6 +339,10 @@ class Message(Container):
             separators=separators,
             factory=factory,
         )
+        # Occurrence ids explicitly removed from this message. A removed
+        # occurrence never becomes valid again, even if the same object is
+        # re-inserted elsewhere.
+        self._retired_occurrences = set()
 
     """Representation of an HL7 message. It contains a list
     of :py:class:`hl7.Segment` instances.
@@ -390,7 +400,49 @@ class Message(Container):
             return self.assign_field(value, *Accessor.parse_key(key))
         elif isinstance(key, Accessor):
             return self.assign_field(value, *key)
+        elif isinstance(key, (int, slice)):
+            previous = list(self[key]) if isinstance(key, slice) else [self[key]]
+            result = super().__setitem__(key, value)
+            for segment in previous:
+                if not any(current is segment for current in self):
+                    self._retire(segment)
+            return result
         return super().__setitem__(key, value)
+
+    def __delitem__(self, key):
+        removed = list(self[key]) if isinstance(key, slice) else [self[key]]
+        super().__delitem__(key)
+        for segment in removed:
+            self._retire(segment)
+
+    def pop(self, index=-1):
+        removed = self[index]
+        result = super().pop(index)
+        self._retire(removed)
+        return result
+
+    def remove(self, segment):
+        """Remove *segment* by object identity.
+
+        The built-in ``list.remove`` would compare by value, which is
+        ambiguous when same-named segments carry identical fields.  Issues
+        must never follow the wrong occurrence, so removal is identity based.
+        """
+        for index, current in enumerate(self):
+            if current is segment:
+                del self[index]
+                return
+        raise ValueError("segment is not in the message")
+
+    def clear(self):
+        for segment in self:
+            self._retire(segment)
+        super().clear()
+
+    def _retire(self, segment):
+        occurrence_id = getattr(segment, "occurrence_id", None)
+        if occurrence_id is not None:
+            self._retired_occurrences.add(occurrence_id)
 
     def segment(self, segment_id):
         """Gets the first segment with the *segment_id* from the parsed
@@ -424,6 +476,126 @@ class Message(Container):
         if len(matches) == 0:
             raise KeyError("No %s segments" % segment_id)
         return matches
+
+    def _contains_segment(self, segment):
+        """Return True if *segment* is one of this message's current segments."""
+        if getattr(segment, "occurrence_id", None) in self._retired_occurrences:
+            return False
+        return any(current is segment for current in self)
+
+    def _segment_num(self, segment):
+        """Return the current 1-based number of *segment* among its peers."""
+        if not self._contains_segment(segment):
+            return None
+        segment_id = segment[0][0]
+        num = 0
+        for current in self:
+            if current[0][0] == segment_id:
+                num += 1
+            if current is segment:
+                return num
+        return None
+
+    def occurrence(self, segment, segment_num=1):
+        """Return a :class:`hl7.SegmentOccurrence` for one segment.
+
+        *segment* may be a segment identifier such as ``"PID"`` (combined with
+        *segment_num*), an accessor-style key such as ``"PID2"`` or
+        ``"PID2.3"``, or an occurrence identifier previously obtained from
+        :attr:`hl7.Segment.occurrence_id`.
+
+        The occurrence keeps pointing at the same segment object when other
+        segments are inserted or removed.
+        """
+        if isinstance(segment, SegmentOccurrence):
+            return segment
+        if isinstance(segment, Segment):
+            if not self._contains_segment(segment):
+                raise MissingOccurrenceError(
+                    "segment occurrence {0} is not in the message".format(
+                        segment.occurrence_id
+                    )
+                )
+            return SegmentOccurrence(self, segment)
+        if not isinstance(segment, str):
+            raise TypeError("segment must be a string, Segment or occurrence")
+        if segment.startswith("segment-"):
+            match = self._occurrence_by_id(segment)
+            if match is None:
+                raise MissingOccurrenceError(
+                    "unknown segment occurrence {0}".format(segment)
+                )
+            return match
+        accessor = Accessor.parse_key(segment)
+        wanted = accessor.segment_num if segment_num == 1 else segment_num
+        try:
+            found = self.segments(accessor.segment)(wanted)
+        except (IndexError, KeyError):
+            raise MissingOccurrenceError("no segment matching {0}".format(accessor.key))
+        return SegmentOccurrence(self, found)
+
+    def find_occurrence(self, key):
+        """Return a :class:`hl7.SegmentOccurrence`, or ``None``.
+
+        Only keys that identify a segment (not a field) are resolved; field
+        keys such as ``"PID2.3"`` return ``None``.
+        """
+        if not isinstance(key, str):
+            return None
+        if key.startswith("segment-"):
+            return self._occurrence_by_id(key)
+        if "." in key:
+            return None
+        try:
+            return self.occurrence(key)
+        except (MissingOccurrenceError, ValueError, IndexError):
+            return None
+
+    def _occurrence_by_id(self, occurrence_id):
+        for segment in self:
+            if getattr(segment, "occurrence_id", None) == occurrence_id:
+                return SegmentOccurrence(self, segment)
+        return None
+
+    def occurrences(self, segment_id=None):
+        """Return occurrences for all segments (optionally by identifier)."""
+        return tuple(
+            SegmentOccurrence(self, segment)
+            for segment in self
+            if segment_id is None or segment[0][0] == segment_id
+        )
+
+    def remove_segment(self, target):
+        """Remove a segment by object identity, not by content or position.
+
+        Registrations for that segment become stale; they are never re-bound
+        to a segment that later occupies the same position, nor revived if the
+        same object is re-inserted.  Returns the removed
+        :class:`hl7.Segment`.
+        """
+        if isinstance(target, SegmentOccurrence):
+            target = target.segment
+        for index, current in enumerate(self):
+            if current is target:
+                del self[index]
+                return current
+        raise MissingOccurrenceError("segment is not in the message")
+
+    #: Alias for :meth:`remove_segment`.
+    discard_segment = remove_segment
+
+    @property
+    def issues(self):
+        """The :class:`hl7.FieldIssueRegistry` associated with this message."""
+        registry = getattr(self, "_field_issues", None)
+        if registry is None:
+            registry = FieldIssueRegistry(self)
+            self._field_issues = registry
+        return registry
+
+    def register_issue(self, target, **kwargs):
+        """Register a field issue; shorthand for ``self.issues.register``."""
+        return self.issues.register(target, **kwargs)
 
     def extract_field(
         self,
@@ -616,6 +788,9 @@ class Segment(Container):
             separators=separators,
             factory=factory,
         )
+        # Identifies this particular segment object, independently of its
+        # position or field values.
+        self.occurrence_id = make_occurrence_id()
 
     """Second level of an HL7 message, which represents an HL7 Segment.
     Traditionally this is a line of a message that ends with a carriage

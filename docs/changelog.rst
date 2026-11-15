@@ -4,6 +4,12 @@ Changelog
 0.4.6 - Unreleased
 ------------------
 
+* Added stable :py:class:`hl7.SegmentOccurrence` handles and
+  :py:class:`hl7.FieldIssue` registrations.  Issues keep pointing at the
+  segment object they were registered for, expose a freshly computed
+  ``current_path``, and become stale when that occurrence is deleted instead of
+  being re-bound to the segment that takes over the old position.  Same-named
+  segments with identical field values remain distinct occurrences.
 * Dropped support for Python 3.7 and 3.8. Python 3.9 - 3.13 are now supported.
 * Switched development dependencies to be installed using ``uv`` instead of ``pip``.
 * Converted packaging to ``pyproject.toml`` using ``hatchling`` and removed
