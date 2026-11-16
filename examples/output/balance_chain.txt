@@ -1,0 +1,14 @@
+Statement 1/1: 1000.00 EUR + turnover -50.00 = 950.00 EUR [ok]
+Statement 1/2: 950.00 EUR + turnover -200.00 = 750.00 EUR [ok]
+Statement 2/1: 750.00 EUR + turnover 250.00 = 1000.00 EUR [ok]
+Statement 4/1: 400.00 EUR + turnover -50.00 = 350.00 EUR [ok]
+Statement 5/1: 500.00 USD + turnover 100.00 = 600.00 USD [ok]
+Page link 1/1 -> 1/2: 950.00 EUR == 950.00 EUR [ok]
+Statement link 1 -> 2: 750.00 EUR == 750.00 EUR [ok]
+Statement link 2 -> 4: statement numbers not consecutive; gap, not comparable [gap]
+Statement link 4 -> 5: currency changes EUR -> USD without FX evidence; not comparable [currency-change]
+Statement 1/1: available 900.00 EUR (informational only, not a book balance)
+Statement 1/2: available 700.00 EUR (informational only, not a book balance)
+Statement 2/1: available 1000.00 EUR (informational only, not a book balance)
+Statement 4/1: available 300.00 EUR (informational only, not a book balance)
+Statement 5/1: available 550.00 USD (informational only, not a book balance)

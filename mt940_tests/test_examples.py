@@ -23,6 +23,7 @@ MODULES: tuple[str, ...] = (
     'processors',
     'compatibility',
     'walkthrough',
+    'balance_chain',
 )
 
 
