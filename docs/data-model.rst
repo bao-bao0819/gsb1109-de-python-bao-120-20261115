@@ -94,6 +94,60 @@ may produce ``None``. A tag that never appeared may leave a key absent.
 Structured details emit multiple mapped keys with ``None`` values. Use
 membership tests when absence and ``None`` have different application meanings.
 
+Source-named reference tables
+-----------------------------
+
+One transaction can carry identifiers from several domains: the ``:61:``
+customer and bank references, the ``:20:`` statement reference copied onto
+every row, the ``:21:`` related reference, the ``EREF`` end-to-end reference
+and the transaction code. :func:`mt940.references.build_reference_table` keeps
+them apart instead of flattening them into one value. Each
+:class:`mt940.references.ReferenceKey` pairs the stripped text with its
+:class:`mt940.references.ReferenceSource`, so an identical string in two
+domains never compares equal.
+
+The table does not decide which rows are the same transaction. It returns
+every row carrying a key, and the caller names the domains that form the
+business deduplication basis through
+:meth:`mt940.references.ReferenceTable.groups` and
+:meth:`mt940.references.ReferenceTable.duplicates`.
+
+.. doctest::
+
+   >>> import mt940
+   >>> source = (
+   ...     ':20:STMT-1\n'
+   ...     ':25:NL00BANK0123456789\n'
+   ...     ':28C:1/1\n'
+   ...     ':60F:C260101EUR100,00\n'
+   ...     ':61:260102C5,00NTRFINV-1//BANK-1\n'
+   ...     ':61:260102D5,00NTRFNONREF\n'
+   ...     ':62F:C260102EUR100,00\n'
+   ... )
+   >>> transactions = mt940.parse(source)
+   >>> domains = [
+   ...     mt940.references.ReferenceSource.CUSTOMER,
+   ...     mt940.references.ReferenceSource.BANK,
+   ... ]
+   >>> table = mt940.references.build_reference_table(
+   ...     transactions, sources=domains
+   ... )
+   >>> table.unreferenced
+   frozenset({1})
+   >>> rows = table.duplicates(*domains)
+   >>> rows
+   {}
+
+Placeholder values such as ``NOREF`` and ``NONREF`` repeat across unrelated
+transactions and are not reliable identifiers. They are skipped by default and
+their transactions stay individually listed in
+:attr:`mt940.references.ReferenceTable.unreferenced`, so a batch of ``NOREF``
+rows can never collapse into one transaction. Pass
+``include_placeholders=True`` to retain them as ordinary, per-transaction
+entries, or supply your own set with ``placeholder_values``. Restrict the
+extracted domains with ``sources`` when, for example, the copied ``:20:``
+statement reference must not participate in matching.
+
 Money and signs
 ---------------
 

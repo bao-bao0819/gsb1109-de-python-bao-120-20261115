@@ -11,9 +11,15 @@
     "symbols": [
       "mt940",
       "mt940.JSONEncoder",
+      "mt940.NON_REFERENCE_VALUES",
       "mt940.Options",
+      "mt940.ReferenceEntry",
+      "mt940.ReferenceKey",
+      "mt940.ReferenceSource",
+      "mt940.ReferenceTable",
       "mt940.__all__",
       "mt940.__version__",
+      "mt940.build_reference_table",
       "mt940.parse",
       "mt940.parse_statements"
     ]
@@ -255,6 +261,54 @@
       "mt940.processors.transaction_details_post_processor_with_space",
       "mt940.processors.transactions_to_transaction",
       "mt940.processors.transactions_to_transaction._transactions_to_transaction"
+    ]
+  },
+  "mt940.references": {
+    "reference": "mt940.references.html",
+    "guides": [
+      "bank-formats.html",
+      "data-model.html"
+    ],
+    "tests": [
+      "mt940_tests/test_references.py"
+    ],
+    "symbols": [
+      "mt940.references",
+      "mt940.references.NON_REFERENCE_VALUES",
+      "mt940.references.ReferenceEntry",
+      "mt940.references.ReferenceEntry.__eq__",
+      "mt940.references.ReferenceEntry.__hash__",
+      "mt940.references.ReferenceEntry.__init__",
+      "mt940.references.ReferenceEntry.__repr__",
+      "mt940.references.ReferenceEntry.key",
+      "mt940.references.ReferenceEntry.transaction_index",
+      "mt940.references.ReferenceKey",
+      "mt940.references.ReferenceKey.__eq__",
+      "mt940.references.ReferenceKey.__hash__",
+      "mt940.references.ReferenceKey.__init__",
+      "mt940.references.ReferenceKey.__repr__",
+      "mt940.references.ReferenceKey.source",
+      "mt940.references.ReferenceKey.value",
+      "mt940.references.ReferenceSource",
+      "mt940.references.ReferenceSource.BANK",
+      "mt940.references.ReferenceSource.CUSTOMER",
+      "mt940.references.ReferenceSource.END_TO_END",
+      "mt940.references.ReferenceSource.RELATED",
+      "mt940.references.ReferenceSource.STATEMENT",
+      "mt940.references.ReferenceSource.TRANSACTION_CODE",
+      "mt940.references.ReferenceTable",
+      "mt940.references.ReferenceTable.__contains__",
+      "mt940.references.ReferenceTable.__init__",
+      "mt940.references.ReferenceTable.__iter__",
+      "mt940.references.ReferenceTable.__len__",
+      "mt940.references.ReferenceTable._entries",
+      "mt940.references.ReferenceTable._index",
+      "mt940.references.ReferenceTable.duplicates",
+      "mt940.references.ReferenceTable.groups",
+      "mt940.references.ReferenceTable.lookup",
+      "mt940.references.ReferenceTable.unreferenced",
+      "mt940.references._entry_value",
+      "mt940.references.build_reference_table"
     ]
   },
   "mt940.tags": {

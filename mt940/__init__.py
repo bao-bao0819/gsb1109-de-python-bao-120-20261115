@@ -24,23 +24,38 @@ Example:
     <500.00 EUR>
 """
 
-from . import json, models, parser, processors, tags, utils
+from . import json, models, parser, processors, references, tags, utils
 from .__about__ import __version__
 from .json import JSONEncoder
 from .options import Options
 from .parser import parse, parse_statements
+from .references import (
+    NON_REFERENCE_VALUES,
+    ReferenceEntry,
+    ReferenceKey,
+    ReferenceSource,
+    ReferenceTable,
+    build_reference_table,
+)
 
 #: Supported names exported by ``from mt940 import *``.
 __all__ = [
     'JSONEncoder',
+    'NON_REFERENCE_VALUES',
     'Options',
+    'ReferenceEntry',
+    'ReferenceKey',
+    'ReferenceSource',
+    'ReferenceTable',
     '__version__',
+    'build_reference_table',
     'json',
     'models',
     'parse',
     'parse_statements',
     'parser',
     'processors',
+    'references',
     'tags',
     'utils',
 ]

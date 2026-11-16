@@ -66,6 +66,12 @@ on its tag and processors.
 - Use `json.dumps(statement, cls=mt940.JSONEncoder)` to export metadata and
   transactions. Decimal values become strings. There is no matching decoder
   that reconstructs the models.
+- Build a source-named reference table with
+  `mt940.build_reference_table(statement)`. Customer, bank, statement,
+  related, end-to-end references and transaction codes stay in separate
+  domains. The table never merges transactions: name the domains in
+  `duplicates(*sources)` and leave `NOREF`/`NONREF` rows individually listed
+  in `unreferenced`.
 
 The [usage guide](https://mt940.readthedocs.io/en/latest/usage.html) explains
 these choices. The [API reference](https://mt940.readthedocs.io/en/latest/modules.html)

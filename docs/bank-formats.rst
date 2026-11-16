@@ -134,6 +134,20 @@ string, including an empty string when omitted. Convert and validate the count
 in your application if you require an integer. Its historical annotation does
 not change that runtime behaviour.
 
+Reference domains
+-----------------
+
+The fields above feed the six source domains of
+:class:`mt940.references.ReferenceSource`: the ``:61:``
+``customer_reference`` and ``bank_reference``, the ``:20:``
+``transaction_reference``, the ``:21:`` ``related_reference``, the
+``end_to_end_reference`` from ``EREF`` and the ``transaction_code``.
+:func:`mt940.references.build_reference_table` indexes them per domain and
+never merges transactions, while :meth:`mt940.references.ReferenceTable.duplicates`
+leaves the deduplication basis to the caller. Repeated ``NOREF`` and
+``NONREF`` placeholders stay out of the index by default. See
+:doc:`data-model` for a worked example.
+
 Structured ``:86:`` fields
 --------------------------
 

@@ -171,6 +171,22 @@ def _resolve_alias(
         'PreProcessor': 'mt940._types.PreProcessor',
         'PostProcessor': 'mt940._types.PostProcessor',
         'TagDict': 'mt940._types.TagDict',
+        'NON_REFERENCE_VALUES': 'mt940.references.NON_REFERENCE_VALUES',
+        'ReferenceEntry': 'mt940.references.ReferenceEntry',
+        'ReferenceKey': 'mt940.references.ReferenceKey',
+        'ReferenceSource': 'mt940.references.ReferenceSource',
+        'ReferenceTable': 'mt940.references.ReferenceTable',
+        'build_reference_table': 'mt940.references.build_reference_table',
+        'mt940.NON_REFERENCE_VALUES': (
+            'mt940.references.NON_REFERENCE_VALUES'
+        ),
+        'mt940.ReferenceEntry': 'mt940.references.ReferenceEntry',
+        'mt940.ReferenceKey': 'mt940.references.ReferenceKey',
+        'mt940.ReferenceSource': 'mt940.references.ReferenceSource',
+        'mt940.ReferenceTable': 'mt940.references.ReferenceTable',
+        'mt940.build_reference_table': (
+            'mt940.references.build_reference_table'
+        ),
     }
     target: str = node.get('reftarget', '')
     if target == 're.error':

@@ -34,8 +34,8 @@ def generate(package: Path, destination: Path) -> None:
                 '* :class:`mt940.options.Options`\n'
                 '* :class:`mt940.json.JSONEncoder`\n\n'
                 'Import these directly from ``mt940``. The module exports\n'
-                '``models``, ``parser``, ``processors``, ``tags``,\n'
-                '``utils``, '
+                '``models``, ``parser``, ``processors``, ``references``,\n'
+                '``tags``, ``utils``, '
                 '``json`` and ``__version__``.\n'
             )
         else:
