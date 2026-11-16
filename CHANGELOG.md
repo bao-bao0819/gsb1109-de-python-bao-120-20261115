@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]
 
+### Added
+- `InterchangeSplitter` (and the `Interchange.split()` convenience method) to
+  split an interchange into size-limited interchanges. Messages are kept intact,
+  sizes are measured on the serialized and encoded output, each result gets a
+  unique control reference and a recalculated `UNZ` count, and a single message
+  that exceeds the limit raises `MessageTooLargeError`.
+
 ### Fixed
 - Honor `break_lines=True` after the UNA header when serializing an empty segment list.
 

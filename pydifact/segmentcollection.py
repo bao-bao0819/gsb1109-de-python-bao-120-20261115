@@ -522,6 +522,48 @@ class Interchange(AbstractSegmentsContainer):
         self.add_segments(i for i in segments if i is not None)
         return self
 
+    def split(
+        self,
+        max_bytes: int,
+        encoding: str = "iso8859-1",
+        first_control_reference: str | int | None = None,
+        control_reference_step: int = 1,
+    ) -> list["Interchange"]:
+        """Split the interchange into copies that each respect a byte limit.
+
+        Messages (``UNH`` ... ``UNT``) are kept intact and distributed whole
+        over new interchanges. Each result gets a unique control reference and
+        a recalculated ``UNZ`` message count; sizes are measured after
+        serialization and encoding. See
+        `pydifact.control.splitting.InterchangeSplitter` for details.
+
+        Args:
+            max_bytes: Maximum encoded size of one generated interchange.
+            encoding: Encoding used to measure the byte size.
+            first_control_reference: Control reference of the first result;
+                defaults to this interchange's reference.
+            control_reference_step: Increment between consecutive references.
+
+        Returns:
+            A list of new, size-limited `Interchange` objects (empty if this
+            interchange contains no messages).
+
+        Raises:
+            MessageTooLargeError: If a single message exceeds ``max_bytes``.
+        """
+        # Imported lazily to avoid a circular import: control.splitting itself
+        # imports this module.
+        from pydifact.control.splitting import InterchangeSplitter
+
+        return list(
+            InterchangeSplitter(
+                max_bytes,
+                encoding=encoding,
+                first_control_reference=first_control_reference,
+                control_reference_step=control_reference_step,
+            ).split(self)
+        )
+
     @classmethod
     def from_file(
         cls,

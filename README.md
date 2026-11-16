@@ -129,6 +129,33 @@ of the `UNA` segment or leading whitespace. Each of them emits a
 `warn_non_conformant=False` (on `Parser`, `from_str()` and `from_file()`) or a
 standard `warnings` filter.
 
+### Splitting an interchange by size
+
+When the receiving station limits the size of one interchange, an interchange
+can be split into several smaller ones. Messages (`UNH` ... `UNT`) are always
+kept intact and distributed whole; the byte size is measured on the serialized
+and encoded output (escaping included). Each generated interchange gets its own
+control reference and a recalculated `UNZ` message count:
+
+```python
+from pydifact.control.splitting import InterchangeSplitter, MessageTooLargeError
+
+try:
+    parts = InterchangeSplitter(max_bytes=5000).split(interchange)
+except MessageTooLargeError as error:
+    # a single message already exceeds the limit and cannot be split;
+    # error.control_reference keeps the failure reconcilable
+    print(error)
+else:
+    for part in parts:
+        send(part.serialize())  # each part is <= 5000 encoded bytes
+```
+
+The same call is available directly on an `Interchange` via
+`interchange.split(max_bytes=5000)`. Re-running the split on the unchanged
+interchange reproduces the same plan and the same control references, so
+retries never reuse a control number.
+
 
 ## Limitations
 

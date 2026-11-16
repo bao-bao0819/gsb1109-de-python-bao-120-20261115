@@ -26,3 +26,8 @@ Tokenizer
 ---------
 .. automodule:: pydifact.tokenizer
     :members:
+
+Interchange splitting
+---------------------
+.. automodule:: pydifact.control.splitting
+    :members:
