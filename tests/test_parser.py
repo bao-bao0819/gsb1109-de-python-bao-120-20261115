@@ -89,6 +89,13 @@ class TreeBuilderRegexTestCase(TestCase):
         self.assertIsNone(parsed.closetag)
         self.assertIsNone(parsed.tail)
 
+    def test_xml_selfclosing_no_space(self):
+        markup = "<TAG/>"
+        parsed = self._parsetag(markup)
+        self.assertEqual(parsed.tag, "TAG/")
+        self.assertIsNone(parsed.text)
+        self.assertIsNone(parsed.closetag)
+
     def test_cdata(self):
         markup = "<TAG><![CDATA[cdata]]>"
         parsed = self._parsetag(markup)

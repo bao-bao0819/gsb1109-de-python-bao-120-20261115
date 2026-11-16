@@ -54,6 +54,18 @@ class OFXHeaderBase:
     regex: Any = NotImplemented  # Define in subclass
     codec: Any = NotImplemented  # Define in subclass
 
+    # Interface shared by the concrete header classes; each is a
+    # ``ofxtools.Types`` descriptor in the subclass.
+    ofxheader: Any
+    version: Any
+    security: Any
+    oldfileuid: Any
+    newfileuid: Any
+    data: Any
+    encoding: Any
+    charset: Any
+    compression: Any
+
     @classmethod
     def parse(cls, rawheader: str) -> tuple[OFXHeaderBase, int]:
         """
@@ -171,13 +183,24 @@ class OFXHeaderV1(OFXHeaderBase):
 
 
 class OFXHeaderV2(OFXHeaderBase):
-    """Header for OFX version 2"""
+    """Header for OFX version 2
+
+    The optional ``orig*`` fields carry provenance for a conversion from
+    OFXv1 (SGML).  They are emitted in the ``<?OFX ...?>`` processing
+    instruction only when set, so ordinary OFXv2 headers are unchanged.
+    """
 
     ofxheader = Types.OneOf(200)
     version = Types.OneOf(200, 201, 202, 203, 210, 211, 220)
     security = Types.OneOf("NONE", "TYPE1")
     oldfileuid = Types.String(36)
     newfileuid = Types.String(36)
+    origversion = Types.String(16)
+    origencoding = Types.String(16)
+    origcharset = Types.String(16)
+    origcompression = Types.String(16)
+    origdata = Types.String(16)
+    origofxheader = Types.String(16)
 
     regex = re.compile(
         r"""<\?OFX\s+
@@ -186,6 +209,14 @@ class OFXHeaderV2(OFXHeaderBase):
                        SECURITY=\"(?P<security>[\w]+)\"\s+
                        OLDFILEUID=\"(?P<oldfileuid>[\w-]+)\"\s+
                        NEWFILEUID=\"(?P<newfileuid>[\w-]+)\"\s*
+                       (?:
+                           ORIGOFXHEADER=\"(?P<origofxheader>[\w-]+)\"\s+
+                           ORIGDATA=\"(?P<origdata>[\w-]+)\"\s+
+                           ORIGVERSION=\"(?P<origversion>[\w.-]+)\"\s+
+                           ORIGENCODING=\"(?P<origencoding>[\w-]+)\"\s+
+                           ORIGCHARSET=\"(?P<origcharset>[\w-]+)\"\s+
+                           ORIGCOMPRESSION=\"(?P<origcompression>[\w-]+)\"\s*
+                       )?
                        \?>\s*""",
         re.VERBOSE,
     )
@@ -200,6 +231,12 @@ class OFXHeaderV2(OFXHeaderBase):
         security: str | None = None,
         oldfileuid: str | None = None,
         newfileuid: str | None = None,
+        origversion: str | None = None,
+        origencoding: str | None = None,
+        origcharset: str | None = None,
+        origcompression: str | None = None,
+        origdata: str | None = None,
+        origofxheader: str | None = None,
     ):
         try:
             self.version = int(version)
@@ -209,17 +246,34 @@ class OFXHeaderV2(OFXHeaderBase):
             self.newfileuid = newfileuid or "NONE"
         except ValueError as err:
             raise OFXHeaderError(f"Invalid OFX header - {err.args[0]}")
+        self.origversion = origversion
+        self.origencoding = origencoding
+        self.origcharset = origcharset
+        self.origcompression = origcompression
+        self.origdata = origdata
+        self.origofxheader = origofxheader
 
     def __str__(self) -> str:
         # XML header
         xml_decl = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>'
-        fields = (
+        fields = [
             ("OFXHEADER", str(self.ofxheader)),
             ("VERSION", str(self.version)),
             ("SECURITY", self.security),
             ("OLDFILEUID", self.oldfileuid),
             ("NEWFILEUID", self.newfileuid),
-        )
+        ]
+        for attr in (
+            "origofxheader",
+            "origdata",
+            "origversion",
+            "origencoding",
+            "origcharset",
+            "origcompression",
+        ):
+            value = getattr(self, attr)
+            if value is not None:
+                fields.append((attr.upper(), value))
         attrs = ["=".join((attr, f'"{val}"')) for attr, val in fields]
         ofx_decl = f"<?OFX {' '.join(attrs)}?>"
         return "\r\n".join((xml_decl, ofx_decl, ""))

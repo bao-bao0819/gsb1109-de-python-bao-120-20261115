@@ -16,6 +16,7 @@ __all__ = [
     "OFXTypeWarning",
     "OFXTypeError",
     "OFXSpecError",
+    "EMPTY",
     "Element",
     "Bool",
     "String",
@@ -54,6 +55,38 @@ class OFXTypeError(ValueError):
 
 class OFXSpecError(OFXTypeError):
     """Violation of the OFX specification"""
+
+
+class _Empty:
+    """Sentinel for an element that is present but has no text content.
+
+    ``None`` means the element is absent.  ``EMPTY`` means it was present in
+    the markup as e.g. ``<MEMO></MEMO>`` or ``<MEMO/>``.  Keeping these two
+    cases distinct lets a conversion round-trip without inventing or dropping
+    elements.
+    """
+
+    _instance: _Empty | None = None
+
+    def __new__(cls) -> _Empty:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "EMPTY"
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __copy__(self) -> _Empty:
+        return self
+
+    def __deepcopy__(self, memo: Any) -> _Empty:
+        return self
+
+
+EMPTY = _Empty()
 
 
 class Element:
@@ -112,6 +145,9 @@ class Element:
         if value is None:
             self.enforce_required(value)
             obj.__dict__[self.name] = None
+        elif value is EMPTY:
+            self.enforce_required(value)
+            obj.__dict__[self.name] = EMPTY
         else:
             obj.__dict__[self.name] = self.convert(value)
 
@@ -119,6 +155,8 @@ class Element:
         raise NotImplementedError
 
     def unconvert(self, value: Any) -> Any:
+        if value is EMPTY:
+            return None
         if value is None:
             self.enforce_required(value)
             return None
@@ -128,7 +166,7 @@ class Element:
         raise NotImplementedError
 
     def enforce_required(self, value: Any) -> None:
-        if value is None and self.required:
+        if (value is None or value is EMPTY) and self.required:
             raise OFXSpecError(f"{self.__class__.__name__}: Value is required")
 
 
@@ -609,6 +647,9 @@ class ListElement(Element):
         return f"<{self.__class__.__name__} converter={self.converter!r} required={self.required}>"
 
     def convert(self, value: Any) -> Any:
+        if value is EMPTY:
+            self.enforce_required(value)
+            return EMPTY
         if value is None:
             self.enforce_required(value)
             return None
@@ -641,6 +682,9 @@ class SubAggregate(Element):
         return f"<{self.__class__.__name__} type={self.aggregate_type.__name__} required={self.required}>"
 
     def convert(self, value: Any) -> Any:
+        if value is EMPTY:
+            self.enforce_required(value)
+            return EMPTY
         if isinstance(value, self.aggregate_type):
             return value
         raise TypeError(f"'{value}' is not an instance of {self.aggregate_type}")

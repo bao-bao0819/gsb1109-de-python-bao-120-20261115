@@ -292,14 +292,18 @@ class Aggregate(list[Any]):
 
             # Parse attribute value
             if attrname in cls.unsupported:
-                value: str | Aggregate | None = None
+                value: str | Aggregate | Types._Empty | None = None
             elif attrname not in cls.subaggregates:
                 # Element - extract as string; type conversion happens in
                 # ``ofxtools.Types.Element.__set__()`` during __init__.
                 # Use the class spec (not elem.text) to discriminate text
                 # elements from aggregates so empty elements (<MEMO></MEMO>
                 # or <MEMO/>) are handled correctly.
-                value = child.text
+                #
+                # ``None`` means "element absent"; an element that is present
+                # but has no text keeps the ``EMPTY`` sentinel so conversion
+                # back to XML reproduces it instead of dropping it.
+                value = child.text if child.text is not None else Types.EMPTY
             else:
                 # Aggregate - recurse
                 value = Aggregate.from_etree(child)

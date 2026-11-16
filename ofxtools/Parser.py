@@ -199,7 +199,16 @@ class TreeBuilder(ET.TreeBuilder):
         * If there's text data, it's a leaf.  Write the data and pop it.
         * If there's no text, it's a branch.
             - If regex captured closetag, it's an empty "aggregate"; pop it.
+            - XML self-closing syntax (``<TAG/>`` / ``<TAG />``) is an
+              empty element; model conversion decides whether the tag is an
+              aggregate or a data-bearing element.
         """
+        # ``regex`` allows "/" in tag names so it can also match closing
+        # tags.  A self-closing XML tag therefore arrives with a trailing
+        # slash; normalize it away here.
+        selfclosing = tag.endswith("/")
+        tag = tag.rstrip(" /")
+
         logger.debug(f"Pushing tag '{tag}'")
         self.start(tag, {})
         if text:
@@ -210,9 +219,9 @@ class TreeBuilder(ET.TreeBuilder):
             # End all elements, whether or not they're explicitly ended
             logger.debug(f"Popping tag '{tag}'")
             self.end(tag)
-        elif closetag:
-            # Empty OFX "aggregate" branch
-            logger.debug(f"Popping tag '{closetag}'")
+        elif closetag or selfclosing:
+            # Empty OFX "aggregate" branch, or self-closing XML element
+            logger.debug(f"Popping tag '{tag}'")
             self.end(tag)
 
     @staticmethod
