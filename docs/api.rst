@@ -31,6 +31,31 @@ python-hl7 API
 
 .. autofunction:: hl7.parse_datetime
 
+.. autofunction:: hl7.apply_incremental
+
+.. autofunction:: hl7.merge_messages
+
+.. autoclass:: hl7.PatientRecord
+   :members: apply, update, merge, value, get, segment, history_for, provenance, locations, to_message, to_hl7, changes, initial_changes, ignored_changes, messages, version
+
+.. autoclass:: hl7.FieldPolicy
+   :members: action_for
+
+.. autoclass:: hl7.RecordPolicy
+   :members: for_accessor, with_field
+
+.. autoclass:: hl7.FieldChange
+   :members: as_dict
+
+.. autoclass:: hl7.SourceLocation
+   :members: as_dict
+
+.. autodata:: hl7.NULL_VALUE
+
+.. autodata:: hl7.PRESERVE
+
+.. autodata:: hl7.CLEAR
+
 
 Data Types
 ----------

@@ -27,6 +27,23 @@ from .exceptions import (
     ParseException,
 )
 from .parser import parse, parse_batch, parse_file, parse_hl7
+from .record import (
+    CLEAR,
+    NULL_VALUE,
+    PRESERVE,
+    FieldChange,
+    FieldPolicy,
+    IgnoredChange,
+    MessageInfo,
+    MessageVersion,
+    PatientRecord,
+    Record,
+    RecordPolicy,
+    SourceLocation,
+    apply_incremental,
+    merge,
+    merge_messages,
+)
 from .util import generate_message_control_id, isbatch, isfile, ishl7, split_file
 
 __version__ = "0.4.6.dev0"
@@ -61,6 +78,21 @@ __all__ = [
     "split_file",
     "generate_message_control_id",
     "parse_datetime",
+    "PatientRecord",
+    "Record",
+    "RecordPolicy",
+    "FieldPolicy",
+    "FieldChange",
+    "IgnoredChange",
+    "MessageInfo",
+    "MessageVersion",
+    "SourceLocation",
+    "apply_incremental",
+    "merge_messages",
+    "merge",
+    "NULL_VALUE",
+    "PRESERVE",
+    "CLEAR",
     "HL7Exception",
     "MalformedBatchException",
     "MalformedFileException",

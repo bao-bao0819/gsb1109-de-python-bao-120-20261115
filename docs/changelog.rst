@@ -4,6 +4,12 @@ Changelog
 0.4.6 - Unreleased
 ------------------
 
+* Added :py:class:`hl7.PatientRecord` for applying incremental HL7 messages to
+  a record.  Absent and empty fields preserve stored values, the explicit HL7
+  null clears them, repetitions are updated independently, and each change
+  records its position in the source message.  Older messages cannot overwrite
+  or restore values from newer messages.
+
 * Dropped support for Python 3.7 and 3.8. Python 3.9 - 3.13 are now supported.
 * Switched development dependencies to be installed using ``uv`` instead of ``pip``.
 * Converted packaging to ``pyproject.toml`` using ``hatchling`` and removed
