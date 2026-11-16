@@ -37,7 +37,124 @@ class ParserError(HL7apyException):
     """
 
 
-class ValidationError(HL7apyException):
+class ValidationIssue(HL7apyException):
+    """
+    Base class for validation problems carrying machine readable location
+    information.
+
+    The plain exception message is kept backward compatible; the additional
+    attributes are filled in by :class:`hl7apy.validation.Validator` and make
+    the problem locatable inside a batch report:
+
+    * :attr:`category` is ``"structure"`` or ``"value"``
+    * :attr:`path` is the full element path (occurrence indexes included)
+    * :attr:`group_path` is the path of the nearest enclosing message/group
+    * :attr:`occurrence` is the 1-based occurrence of the element (or of its
+      parent for missing required children)
+    * :attr:`constraint` describes the rule that was violated (e.g. ``"1..1"``,
+      ``"datatype CX"``, ``"table HL70155"``)
+    * :attr:`fragment` is the matching fragment of the original ER7 input when
+      the message was parsed from a source string
+    """
+
+    def __init__(
+        self,
+        message=None,
+        code=None,
+        category='structure',
+        path=None,
+        group_path=None,
+        occurrence=None,
+        constraint=None,
+        fragment=None,
+        element=None,
+        element_name=None,
+        target_kind=None,
+        is_cascade=False,
+        caused_by=None,
+    ):
+        super().__init__(message)
+        self.message = None if message is None else str(message)
+        self.code = code
+        self.category = category
+        self.path = path
+        self.group_path = group_path
+        self.occurrence = occurrence
+        self.constraint = constraint
+        self.fragment = fragment
+        if element_name is None and element is not None:
+            element_name = getattr(element, 'name', None)
+        self.element = element_name
+        self.element_object = element
+        self.element_name = element_name
+        self.target_kind = target_kind
+        self.is_cascade = is_cascade
+        self.caused_by = caused_by
+
+    def __str__(self):
+        return '' if self.message is None else self.message
+
+    # Read-only aliases, so callers can use the wording they are used to
+    # without losing the machine readable fields.
+    @property
+    def severity(self):
+        return 'error' if isinstance(self, ValidationError) else 'warning'
+
+    @property
+    def group(self):
+        return self.group_path
+
+    @property
+    def occurrence_index(self):
+        return self.occurrence
+
+    @property
+    def position(self):
+        return self.occurrence
+
+    @property
+    def rule(self):
+        return self.constraint
+
+    @property
+    def source_fragment(self):
+        return self.fragment
+
+    @property
+    def raw_fragment(self):
+        return self.fragment
+
+    @property
+    def is_structural(self):
+        return self.category == 'structure'
+
+    @property
+    def is_value(self):
+        return self.category == 'value'
+
+    def to_dict(self):
+        data = {
+            'severity': 'error' if isinstance(self, ValidationError) else 'warning',
+            'category': self.category,
+            'code': self.code,
+            'message': self.message,
+            'path': self.path,
+            'group_path': self.group_path,
+            'occurrence': self.occurrence,
+            'constraint': self.constraint,
+            'fragment': self.fragment,
+            'element': self.element_name,
+            'is_cascade': self.is_cascade,
+            'caused_by': self.caused_by,
+        }
+        if getattr(self, 'message_index', None) is not None:
+            data['message_index'] = self.message_index
+        if getattr(self, 'message_id', None) is not None:
+            data['message_id'] = self.message_id
+        return data
+
+
+class ValidationError(ValidationIssue):
     r"""
     Error during validation
 
@@ -56,7 +173,7 @@ class ValidationError(HL7apyException):
     """
 
 
-class ValidationWarning(HL7apyException):
+class ValidationWarning(ValidationIssue):
     """
     Warning during validation
     """

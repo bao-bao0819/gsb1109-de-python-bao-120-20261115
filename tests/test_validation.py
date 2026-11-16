@@ -807,5 +807,256 @@ class TestMessageProfile(unittest.TestCase):
         self.assertTrue(msg.validate())
 
 
+class TestLocatableValidation(unittest.TestCase):
+    """
+    Validation issues must be locatable: category, group path, occurrence,
+    constraint and the original ER7 fragment. A missing parent group must be
+    reported once instead of turning all of its absent children into separate
+    source problems.
+    """
+
+    def setUp(self):
+        hl7apy.set_default_validation_level(VALIDATION_LEVEL.TOLERANT)
+        self.oml_o33 = (
+            'MSH|^~\\&|SENDING APP|SENDING FAC|REC APP|REC FAC|20110708162817||OML^O33^OML_O33|'
+            '978226056138290600|D|2.5|||||USA||EN\r'
+            'PID|||1010110909194822^^^GATEWAY^PK||PIPPO^PLUTO||19790515|M\r'
+            'SPM|1|100187400201^||BLDV\r'
+            'ORC|NW|83428|83428\r'
+            'TQ1|||||||||R\r'
+            'OBR|1|83428|83428|TPO^ANTI THYROPEROXIDASE ANTIBODIES^^TPO\r'
+        )
+
+    def test_structure_error_has_group_path_occurrence_and_fragment(self):
+        msg = parse_message(self.oml_o33)
+        del msg.oml_o33_specimen[0].oml_o33_order[0].orc
+        result = msg.validate(return_errors=True)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(len(result.errors), 1)
+        issue = result.errors[0]
+
+        self.assertEqual(issue.category, 'structure')
+        self.assertEqual(issue.code, 'MISSING_REQUIRED_CHILD')
+        self.assertEqual(issue.occurrence, 1)
+        self.assertEqual(issue.constraint, '1..1')
+        self.assertEqual(
+            issue.group_path,
+            'OML_O33/OML_O33_SPECIMEN[1]/OML_O33_ORDER[1]',
+        )
+        self.assertTrue(issue.path.endswith('/ORC[1]'))
+        self.assertEqual(
+            issue.fragment,
+            'TQ1|||||||||R\rOBR|1|83428|83428|TPO^ANTI THYROPEROXIDASE ANTIBODIES^^TPO',
+        )
+
+    def test_value_error_is_separate_from_structure_errors(self):
+        msg = parse_message(self.oml_o33)
+        msg.msh.msh_15 = 'AB'
+        result = msg.validate(return_errors=True)
+
+        self.assertTrue(result.is_valid)
+        self.assertEqual(result.structure_errors, [])
+        self.assertTrue(all(issue.category == 'value' for issue in result.value_errors))
+        table_issue = [issue for issue in result.value_errors if issue.constraint == 'table HL70155'][0]
+        self.assertEqual(table_issue.category, 'value')
+        self.assertEqual(table_issue.path, 'OML_O33/MSH[1]/MSH_15[1]')
+        self.assertEqual(table_issue.fragment, 'AB')
+
+    def test_missing_parent_group_is_not_reported_as_many_child_errors(self):
+        msg = parse_message(self.oml_o33)
+        del msg.oml_o33_specimen
+        result = msg.validate(return_errors=True)
+
+        self.assertEqual(len(result.errors), 1)
+        issue = result.errors[0]
+        self.assertEqual(issue.code, 'MISSING_REQUIRED_CHILD')
+        self.assertEqual(issue.element, 'OML_O33_SPECIMEN')
+        self.assertEqual(issue.path, 'OML_O33/OML_O33_SPECIMEN[1]')
+        self.assertEqual(issue.group_path, 'OML_O33')
+        self.assertEqual(issue.constraint, '1..-1')
+        self.assertIsNone(issue.fragment)
+
+    def test_empty_required_group_reports_only_the_group(self):
+        msg = parse_message(self.oml_o33)
+        msg.oml_o33_specimen[0].children = []
+        result = msg.validate(return_errors=True)
+
+        self.assertEqual(len(result.errors), 1)
+        issue = result.errors[0]
+        self.assertEqual(issue.code, 'EMPTY_REQUIRED_GROUP')
+        self.assertEqual(issue.group_path, 'OML_O33/OML_O33_SPECIMEN[1]')
+        self.assertFalse(issue.is_cascade)
+
+    def test_second_occurrence_is_identified(self):
+        msg = parse_message(self.oml_o33)
+        specimen = Group('OML_O33_SPECIMEN', version='2.5')
+        specimen.children = parse_segments('SPM|2|100187400202^||BLDV', version='2.5', find_groups=False)
+        empty_order = Group('OML_O33_ORDER', version='2.5')
+        specimen.add(empty_order)
+        msg.add(specimen)
+
+        result = msg.validate(return_errors=True)
+        self.assertEqual(len(result.errors), 1)
+        issue = result.errors[0]
+        self.assertEqual(issue.code, 'EMPTY_REQUIRED_GROUP')
+        self.assertEqual(issue.occurrence, 1)
+        self.assertEqual(
+            issue.group_path,
+            'OML_O33/OML_O33_SPECIMEN[2]/OML_O33_ORDER[1]',
+        )
+
+
+class TestBatchValidation(unittest.TestCase):
+    """
+    A batch keeps delivering the valid messages while reporting every invalid
+    one with locatable structural and value problems.
+    """
+
+    def setUp(self):
+        hl7apy.set_default_validation_level(VALIDATION_LEVEL.TOLERANT)
+        self.good = (
+            'MSH|^~\\&|SENDING APP|SENDING FAC|REC APP|REC FAC|20110708162817||OML^O33^OML_O33|'
+            'GOOD-1|D|2.5\r'
+            'PID|||101^^^GATEWAY^MR||PIPPO^PLUTO||19790515|M\r'
+            'SPM|1|100187400201^||BLDV\r'
+            'ORC|NW|83428|83428\r'
+            'TQ1|||||||||R\r'
+            'OBR|1|83428|83428|TPO^ANTI THYROPEROXIDASE ANTIBODIES^^TPO\r'
+        )
+        self.invalid = (
+            'MSH|^~\\&|SENDING APP|SENDING FAC|REC APP|REC FAC|20110708162817||ADT^A01^ADT_A01|'
+            'BAD-1|P|2.6\r'
+            'EVN||20130101101500||01|AAA|20130101082500\r'
+        )
+
+    def test_valid_messages_are_still_delivered(self):
+        from hl7apy.validation import validate_batch
+
+        result = validate_batch([('good', self.good), ('bad', self.invalid)])
+        self.assertEqual(len(result), 2)
+        self.assertTrue(result[0].is_valid)
+        self.assertFalse(result[1].is_valid)
+        self.assertEqual([item.message_id for item in result.valid_items], ['good'])
+        self.assertEqual(result.summary()['valid'], 1)
+        self.assertEqual(result.summary()['invalid'], 1)
+
+    def test_structure_and_value_errors_are_listed_separately(self):
+        from hl7apy.validation import validate_batch
+
+        invalid_value = self.good.replace('|EN\r', '|EN\r') .replace('||19790515|M', '||19790515|Z')
+        result = validate_batch([('values', invalid_value)])
+        item = result[0]
+        self.assertTrue(all(issue.category == 'value' for issue in item.value_errors))
+        self.assertTrue(all(issue.category == 'structure' for issue in item.structure_errors))
+        self.assertTrue(item.value_errors)
+        self.assertEqual(item.structure_errors, [])
+
+    def test_batch_report_contains_group_path_occurrence_constraint_and_fragment(self):
+        from hl7apy.validation import validate_batch
+
+        # Drop the required ORC while keeping its sibling segments: the report
+        # must locate the missing child inside the second-level order group.
+        broken = self.good.replace('ORC|NW|83428|83428\r', '')
+        result = validate_batch([{'id': 'broken', 'message': broken}])
+        text = result.report_text()
+
+        self.assertIn('group_path=OML_O33/OML_O33_SPECIMEN[1]/OML_O33_ORDER[1]', text)
+        self.assertIn('occurrence=1', text)
+        self.assertIn('constraint=1..1', text)
+        self.assertIn("fragment='TQ1|||||||||R\\rOBR|1|83428|83428|"
+                      "TPO^ANTI THYROPEROXIDASE ANTIBODIES^^TPO'", text)
+
+    def test_batch_report_can_be_written_as_json(self):
+        import json
+
+        from hl7apy.validation import validate_batch
+
+        with tempfile.NamedTemporaryFile('r', suffix='.json', delete=False) as report:
+            report_path = report.name
+        try:
+            result = validate_batch([('good', self.good), ('bad', self.invalid)], report_file=report_path)
+            with open(report_path) as report:
+                payload = json.load(report)
+            self.assertEqual(payload['summary']['total'], 2)
+            self.assertEqual(payload['items'][0]['message_id'], 'good')
+            bad = payload['items'][1]
+            self.assertEqual(bad['message_id'], 'bad')
+            self.assertTrue(bad['structure_errors'])
+        finally:
+            os.remove(report_path)
+
+    def test_invalid_message_does_not_stop_the_batch(self):
+        from hl7apy.validation import validate_batch
+
+        result = validate_batch([('bad', self.invalid), ('good', self.good)])
+        self.assertEqual(len(result), 2)
+        self.assertEqual([item.message_id for item in result.valid_items], ['good'])
+
+    def test_valid_messages_are_returned_for_delivery(self):
+        from hl7apy.validation import validate_batch
+
+        result = validate_batch([('one', self.good), ('two', self.good)])
+        self.assertTrue(result.is_valid)
+        self.assertEqual(len(result.valid_messages), 2)
+        self.assertEqual([message.name for message in result.valid_messages], ['OML_O33', 'OML_O33'])
+        self.assertEqual(result.structure_errors, [])
+        self.assertEqual(result.value_errors, [])
+
+    def test_batch_accepts_a_single_message_and_a_file(self):
+        from hl7apy.validation import validate_batch
+
+        single = validate_batch(self.good)
+        self.assertEqual(len(single), 1)
+        self.assertTrue(single[0].is_valid)
+
+        with tempfile.NamedTemporaryFile('w', suffix='.hl7', delete=False, newline='') as source:
+            source.write(self.good)
+            path = source.name
+        try:
+            from_file = validate_batch([('file', path)])
+            self.assertTrue(from_file[0].is_valid)
+            self.assertEqual(from_file[0].message_id, 'file')
+        finally:
+            os.remove(path)
+
+    def test_parse_error_is_reported_and_rest_of_batch_continues(self):
+        from hl7apy.validation import validate_batch
+
+        result = validate_batch([('broken', 'NOTHL7'), ('good', self.good)])
+        self.assertFalse(result[0].is_valid)
+        self.assertEqual(result[0].parse_error, 'Invalid message')
+        self.assertEqual(result[0].errors[0].code, 'PARSE_ERROR')
+        self.assertTrue(result[1].is_valid)
+
+    def test_batch_accepts_a_directory_and_a_mapping(self):
+        from hl7apy.validation import validate_batch
+
+        with tempfile.TemporaryDirectory() as directory:
+            for name, payload in (('a.hl7', self.good), ('b.hl7', self.invalid)):
+                with open(os.path.join(directory, name), 'w', newline='') as target:
+                    target.write(payload)
+            result = validate_batch(directory)
+            self.assertEqual(len(result), 2)
+            self.assertEqual([item.message_id for item in result], ['a.hl7', 'b.hl7'])
+            self.assertFalse(result[1].is_valid)
+
+        by_id = validate_batch({'GOOD': self.good, 'BAD': self.invalid})
+        self.assertEqual([item.message_id for item in by_id], ['GOOD', 'BAD'])
+
+    def test_text_report_is_written(self):
+        from hl7apy.validation import validate_batch
+
+        with tempfile.NamedTemporaryFile('r', suffix='.txt', delete=False) as report:
+            report_path = report.name
+        try:
+            validate_batch([('bad', self.invalid)], report_file=report_path)
+            with open(report_path) as report:
+                text = report.read()
+            self.assertIn('Message bad (ADT_A01): INVALID', text)
+            self.assertIn('Structure errors:', text)
+        finally:
+            os.remove(report_path)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -645,6 +645,7 @@ class Element:
         'repetitions',
         'reference',
         '_truncation_char',
+        '_hl7apy_source_text',
     ]
 
     def __init__(
@@ -673,6 +674,7 @@ class Element:
         self.structure_by_longname = None
         self.ordered_children = None
         self.repetitions = {}
+        self._hl7apy_source_text = None
         self._find_structure(reference)
         self.parent = parent
         if parent is None:

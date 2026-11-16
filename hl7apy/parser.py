@@ -94,6 +94,9 @@ def parse_message(
         children = parse_segments(message, m.version, encoding_chars, validation_level, find_groups=False)
 
     m.children = children
+    # Keep the original ER7 text so validation reports can quote the exact
+    # fragment instead of a re-encoded (and possibly shortened) representation.
+    m._hl7apy_source_text = message
 
     if force_validation:
         if message_profile is None:
