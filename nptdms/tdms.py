@@ -195,23 +195,44 @@ class TdmsFile(object):
 
         incomplete_final_segment = False
         channel_statuses = None
+        channel_counts = OrderedDict()
         if self._reader._segments:
             last_segment = self._reader._segments[-1]
             incomplete_final_segment = last_segment.segment_incomplete
+
+            # Whole-file, per-channel accounting based on the values accumulated while
+            # reading metadata. Declared counts come from the metadata, read counts from
+            # the data that was actually present, so the two are stored separately and a
+            # truncated final segment never has its missing values padded.
+            for path_string, obj in self._reader.object_metadata.items():
+                path = ObjectPath.from_string(path_string)
+                if not path.is_channel:
+                    continue
+                channel_counts[path_string] = ChannelDataCount(
+                    obj.declared_num_values, obj.num_values)
+
+            # Detail for the final segment, retained for backwards compatibility.
             last_chunk_overrides = last_segment.final_chunk_lengths_override
             if last_chunk_overrides is not None:
                 channel_statuses = dict(
                     (obj.path, ChannelSegmentStatus(obj.number_values, last_chunk_overrides.get(obj.path, 0)))
                     for obj in last_segment.ordered_objects
                     if obj.has_data)
+            elif incomplete_final_segment and last_segment.num_chunks == 0:
+                # The metadata was written but no data bytes arrived, so every advertised
+                # value in the final segment is missing rather than present.
+                channel_statuses = dict(
+                    (obj.path, ChannelSegmentStatus(obj.number_values, 0))
+                    for obj in last_segment.ordered_objects
+                    if obj.has_data)
             elif incomplete_final_segment:
-                # Data lengths match expected lengths
+                # Segment length was unknown but all of its data was present.
                 channel_statuses = dict(
                     (obj.path, ChannelSegmentStatus(obj.number_values, obj.number_values))
                     for obj in last_segment.ordered_objects
                     if obj.has_data)
 
-        return FileStatus(incomplete_final_segment, channel_statuses)
+        return FileStatus(incomplete_final_segment, channel_statuses, channel_counts)
 
     def as_dataframe(self, time_index=False, absolute_time=False, scaled_data=True, arrow_dtypes=False):
         """
@@ -333,6 +354,7 @@ class TdmsFile(object):
                     channel_group_properties = OrderedDict()
                 channel = TdmsChannel(
                     path, obj.data_type, obj.scaler_data_types, obj.num_values,
+                    obj.declared_num_values,
                     properties, channel_group_properties, self._properties,
                     tdms_reader, self._raw_timestamps, self._memmap_dir, byte_ranges_reader)
                 if path.group in group_channels:
@@ -531,12 +553,13 @@ class TdmsChannel(object):
     """
 
     def __init__(
-            self, path, data_type, scaler_data_types, number_values,
+            self, path, data_type, scaler_data_types, number_values, declared_number_values,
             properties, group_properties, file_properties,
             tdms_reader, raw_timestamps, memmap_dir, byte_ranges_reader=None):
         self._path = path
         self.properties = properties
         self._length = number_values
+        self._declared_length = declared_number_values
         self.data_type = data_type
         self.scaler_data_types = scaler_data_types
         self._group_properties = group_properties
@@ -554,9 +577,33 @@ class TdmsChannel(object):
         return "<TdmsChannel with path %s>" % self.path
 
     def __len__(self):
-        """ Returns the number of values in this channel
+        """ Returns the number of values actually read from this channel
         """
         return self._length
+
+    @property
+    def declared_length(self):
+        """ Number of values the file's metadata declares for this channel
+
+        This can exceed :py:attr:`read_length` when the final segment was truncated
+        and fewer values were actually present in the file.
+        """
+        return self._declared_length
+
+    @property
+    def read_length(self):
+        """ Number of values actually read from this channel
+
+        Equivalent to ``len(channel)``. Missing values from a truncated final segment
+        are never padded, so this may be smaller than :py:attr:`declared_length`.
+        """
+        return self._length
+
+    @property
+    def missing_length(self):
+        """ Number of declared values that are missing from a truncated final segment
+        """
+        return self._declared_length - self._length
 
     def __iter__(self):
         """ Returns an iterator over the values in this channel
@@ -1042,13 +1089,30 @@ class FileStatus:
     """
     Contains status information about a read TDMS file
     """
-    def __init__(self, incomplete_final_segment, channel_statuses):
+    def __init__(self, incomplete_final_segment, channel_statuses, channel_counts=None):
         #: Boolean indicating whether the last data segment was not written completely,
         #: meaning it may contain less data than expected
         self.incomplete_final_segment = incomplete_final_segment
         #: Dictionary mapping from channel paths to ChannelSegmentStatus objects
         #: when the last segment is incomplete or had an unexpected length
         self.channel_statuses = channel_statuses
+        #: Dictionary mapping from every channel path to a ChannelDataCount object
+        #: describing the number of values declared by the file and the number actually
+        #: read across the whole file, so partial uploads can be ingested without padding
+        self.channel_counts = channel_counts
+
+
+class ChannelDataCount:
+    """ Per-channel accounting of declared versus actually read sample counts
+    """
+    def __init__(self, declared_length, read_length):
+        #: Number of values declared across the whole file's metadata
+        self.declared_length = declared_length
+        #: Number of values actually present and read from the file
+        self.read_length = read_length
+        #: Number of declared values that are missing, typically from a truncated
+        #: final segment. Missing values are never padded with substitute data.
+        self.missing_length = declared_length - read_length
 
 
 class ChannelSegmentStatus:

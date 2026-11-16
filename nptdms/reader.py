@@ -373,6 +373,8 @@ class TdmsReader(object):
 
             object_metadata = self._get_or_create_object(path)
             num_values = _number_of_segment_values(segment_object, segment)
+            object_metadata.declared_num_values += _number_of_declared_segment_values(
+                segment_object, segment)
             if record_byte_ranges and (num_values > 0 or not object_metadata.segment_runs or (
                     object_metadata.data_type is None and segment_object.data_type is not None)):
                 # The segment contains data for the object, its first metadata or its data type
@@ -498,6 +500,22 @@ def _number_of_segment_values(segment_object, segment):
                 segment.final_chunk_lengths_override.get(segment_object.path, 0))
 
 
+def _number_of_declared_segment_values(segment_object, segment):
+    """ Compute the number of values a segment's metadata says an object should have
+
+    Unlike :func:`_number_of_segment_values`, this ignores any reduction from a truncated
+    final chunk, so it reflects what the file declares rather than what was actually read.
+    """
+    if not segment_object.has_data:
+        return 0
+    num_chunks = segment.num_chunks
+    if num_chunks == 0 and segment.segment_incomplete and segment_object.number_values > 0:
+        # No data bytes arrived, but the metadata still advertises a chunk's structure,
+        # so at least one chunk's worth of values was declared for this object.
+        num_chunks = 1
+    return segment_object.number_values * num_chunks
+
+
 def _update_object_data_type(path, obj, segment_object):
     """ Update the data type for an object using its segment metadata
     """
@@ -528,6 +546,10 @@ class ObjectMetadata(object):
         self.data_type = None
         self.scaler_data_types = None
         self.num_values = 0
+        # Number of values declared by the file's metadata, ignoring any reduction
+        # from a truncated final segment. Equals num_values unless the final segment
+        # was incomplete and contained less data than its metadata advertised.
+        self.declared_num_values = 0
         # Runs of consecutive segment indexes that contain this object's data or metadata,
         # as (first, last) tuples
         self.segment_runs = []

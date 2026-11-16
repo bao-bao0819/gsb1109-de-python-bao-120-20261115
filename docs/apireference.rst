@@ -30,6 +30,9 @@ Reading TDMS Files
 .. autoclass:: nptdms.tdms.FileStatus()
   :members:
 
+.. autoclass:: nptdms.tdms.ChannelDataCount()
+  :members:
+
 .. autoclass:: nptdms.tdms.ChannelSegmentStatus()
   :members:
 
