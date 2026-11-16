@@ -26,3 +26,8 @@ Tokenizer
 ---------
 .. automodule:: pydifact.tokenizer
     :members:
+
+Quantity
+--------
+.. automodule:: pydifact.quantity
+    :members:
