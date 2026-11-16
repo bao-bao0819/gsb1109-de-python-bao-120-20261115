@@ -32,6 +32,12 @@ from . import (
     xdmf,
 )
 from .__about__ import __version__
+from ._boundary_catalog import (
+    boundary_catalog,
+    catalog_to_json,
+    rename_group,
+    write_boundary_catalog,
+)
 from ._exceptions import ReadError, WriteError
 from ._helpers import (
     deregister_format,
@@ -83,6 +89,10 @@ __all__ = [
     "extension_to_filetypes",
     "Mesh",
     "CellBlock",
+    "boundary_catalog",
+    "catalog_to_json",
+    "rename_group",
+    "write_boundary_catalog",
     "ReadError",
     "WriteError",
     "topological_dimension",

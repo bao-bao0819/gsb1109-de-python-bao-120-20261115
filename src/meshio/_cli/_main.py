@@ -2,7 +2,15 @@ import argparse
 from sys import version_info
 
 from ..__about__ import __version__
-from . import _ascii, _binary, _compress, _convert, _decompress, _info
+from . import (
+    _ascii,
+    _binary,
+    _boundary_catalog,
+    _compress,
+    _convert,
+    _decompress,
+    _info,
+)
 
 
 def main(argv=None):
@@ -46,6 +54,14 @@ def main(argv=None):
     parser = subparsers.add_parser("binary", help="Convert to binary", aliases=["b"])
     _binary.add_args(parser)
     parser.set_defaults(func=_binary.binary)
+
+    parser = subparsers.add_parser(
+        "boundary-catalog",
+        help="Export a boundary catalog of mesh groups as JSON",
+        aliases=["bc"],
+    )
+    _boundary_catalog.add_args(parser)
+    parser.set_defaults(func=_boundary_catalog.boundary_catalog_cmd)
 
     args = parent_parser.parse_args(argv)
 
