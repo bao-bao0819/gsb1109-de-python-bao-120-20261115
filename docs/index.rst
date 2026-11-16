@@ -13,6 +13,7 @@ Python-osc - OSC server and client in pure python
    dispatcher
    client
    server
+   replay
 
 
 Python-osc implements a server and client for Open Sound Control.

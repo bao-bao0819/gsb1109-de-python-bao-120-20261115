@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 ## Unreleased
 
 - Preserve explicit empty-string arguments in message helpers and TCP clients while keeping omitted values argument-free.
+- Add a record/replay module (`pythonosc.replay`) supporting start at any sampled time, configurable rate, separate sampled versus scheduled times, ordered nested-bundle capture, state/event initial-state rules, and pause/resume that never re-sends confirmed messages.
 
 ## [1.10.2]
 
