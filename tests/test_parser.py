@@ -32,6 +32,7 @@ from hl7apy.exceptions import (
     ValidationError,
 )
 from hl7apy.parser import (
+    find_group_assignments,
     get_message_type,
     parse_component,
     parse_components,
@@ -541,6 +542,172 @@ class TestParser(unittest.TestCase):
                         for sub_cmp in cmp_dts:
                             sub_cmp_type = sub_cmp[1][0]
                             self.assertEqual(sub_cmp_type, 'leaf')
+
+
+class TestFindGroupAssignments(unittest.TestCase):
+    def test_multiple_order_observation_groups(self):
+        segments = ['MSH', 'PID', 'OBR', 'OBX', 'OBX', 'PID', 'ORC', 'OBR', 'OBX', 'NTE', 'NTE']
+        assignments = find_group_assignments(segments, 'ORU_R01', version='2.5')
+        self.assertEqual(len(assignments), 1)
+
+        locations = assignments[0]
+        self.assertEqual([loc.name for loc in locations], segments)
+
+        # MSH is a direct child of the message
+        self.assertEqual(locations[0].groups, ())
+        self.assertEqual(locations[0].occurrence, 1)
+
+        # PID belongs to the PATIENT group of the first PATIENT_RESULT
+        self.assertEqual(locations[1].groups, (('ORU_R01_PATIENT_RESULT', 1), ('ORU_R01_PATIENT', 1)))
+
+        # the first OBR opens the first ORDER_OBSERVATION group
+        self.assertEqual(locations[2].groups, (('ORU_R01_PATIENT_RESULT', 1), ('ORU_R01_ORDER_OBSERVATION', 1)))
+
+        # the two OBX belong to two OBSERVATION instances of the first ORDER_OBSERVATION
+        self.assertEqual(
+            locations[3].groups,
+            (('ORU_R01_PATIENT_RESULT', 1), ('ORU_R01_ORDER_OBSERVATION', 1), ('ORU_R01_OBSERVATION', 1)),
+        )
+        self.assertEqual(
+            locations[4].groups,
+            (('ORU_R01_PATIENT_RESULT', 1), ('ORU_R01_ORDER_OBSERVATION', 1), ('ORU_R01_OBSERVATION', 2)),
+        )
+        self.assertEqual(locations[3].occurrence, 1)
+        self.assertEqual(locations[4].occurrence, 1)
+
+        # the second PID anchors the second PATIENT_RESULT group
+        self.assertEqual(locations[5].groups, (('ORU_R01_PATIENT_RESULT', 2), ('ORU_R01_PATIENT', 1)))
+
+        # ORC and OBR belong to the first ORDER_OBSERVATION of the second PATIENT_RESULT
+        self.assertEqual(locations[6].groups, (('ORU_R01_PATIENT_RESULT', 2), ('ORU_R01_ORDER_OBSERVATION', 1)))
+        self.assertEqual(locations[7].groups, locations[6].groups)
+
+        # the OBX and the NTE repetitions share the same OBSERVATION instance
+        self.assertEqual(
+            locations[8].groups,
+            (('ORU_R01_PATIENT_RESULT', 2), ('ORU_R01_ORDER_OBSERVATION', 1), ('ORU_R01_OBSERVATION', 1)),
+        )
+        self.assertEqual(locations[9].groups, locations[8].groups)
+        self.assertEqual(locations[9].occurrence, 1)
+        self.assertEqual(locations[10].groups, locations[8].groups)
+        self.assertEqual(locations[10].occurrence, 2)
+
+    def test_missing_optional_segments_do_not_change_assignment(self):
+        full = ['MSH', 'SFT', 'PID', 'PD1', 'PV1', 'ORC', 'OBR', 'NTE', 'TQ1', 'OBX', 'NTE', 'SPM', 'OBX',
+                'PID', 'ORC', 'OBR', 'OBX']
+        sparse = ['MSH', 'PID', 'OBR', 'OBX', 'PID', 'OBR', 'OBX']
+
+        full_assignments = find_group_assignments(full, 'ORU_R01', version='2.5')
+        sparse_assignments = find_group_assignments(sparse, 'ORU_R01', version='2.5')
+        self.assertEqual(len(full_assignments), 1)
+        self.assertEqual(len(sparse_assignments), 1)
+
+        full_locations = full_assignments[0]
+        sparse_locations = sparse_assignments[0]
+
+        # the OBR and OBX segments keep the same groups whether the optional
+        # segments around them are present or not
+        full_obr = [loc for loc in full_locations if loc.name == 'OBR']
+        sparse_obr = [loc for loc in sparse_locations if loc.name == 'OBR']
+        self.assertEqual([loc.groups for loc in full_obr], [loc.groups for loc in sparse_obr])
+
+        full_observation_obx = [
+            loc for loc in full_locations if loc.name == 'OBX' and loc.groups[-1][0] == 'ORU_R01_OBSERVATION'
+        ]
+        sparse_obx = [loc for loc in sparse_locations if loc.name == 'OBX']
+        self.assertEqual([loc.groups for loc in full_observation_obx], [loc.groups for loc in sparse_obx])
+
+        # the OBX after the SPM belongs to the SPECIMEN group, not to an OBSERVATION one
+        specimen_obx = full_locations[full.index('SPM') + 1]
+        self.assertEqual(specimen_obx.name, 'OBX')
+        self.assertEqual(
+            specimen_obx.groups,
+            (('ORU_R01_PATIENT_RESULT', 1), ('ORU_R01_ORDER_OBSERVATION', 1), ('ORU_R01_SPECIMEN', 1)),
+        )
+        self.assertEqual(specimen_obx.occurrence, 1)
+
+    def test_ambiguity_is_preserved(self):
+        # two consecutive repeatable groups containing the same segment: every
+        # distribution of the two OBX among the groups is a valid assembly
+        reference = (
+            'sequence',
+            (
+                ('GROUP_A', ('sequence', (('OBX', None, (1, 1), 'SEG'),)), (0, -1), 'GRP'),
+                ('GROUP_B', ('sequence', (('OBX', None, (1, 1), 'SEG'),)), (0, -1), 'GRP'),
+            ),
+        )
+        assignments = find_group_assignments(['OBX', 'OBX'], reference)
+        self.assertEqual(len(assignments), 3)
+
+        paths = {tuple(loc.groups for loc in assignment) for assignment in assignments}
+        self.assertEqual(
+            paths,
+            {
+                ((('GROUP_A', 1),), (('GROUP_A', 2),)),
+                ((('GROUP_A', 1),), (('GROUP_B', 1),)),
+                ((('GROUP_B', 1),), (('GROUP_B', 2),)),
+            },
+        )
+        for assignment in assignments:
+            for loc in assignment:
+                self.assertEqual(loc.occurrence, 1)
+
+    def test_real_message_ambiguity_is_preserved(self):
+        # without a second PID, the second OBR can open either a new ORDER_OBSERVATION
+        # group or a new PATIENT_RESULT group
+        segments = ['MSH', 'PID', 'OBR', 'OBX', 'OBR', 'OBX']
+        assignments = find_group_assignments(segments, 'ORU_R01', version='2.5')
+        self.assertEqual(len(assignments), 2)
+        second_obr = {assignment[4].groups for assignment in assignments}
+        self.assertEqual(
+            second_obr,
+            {
+                (('ORU_R01_PATIENT_RESULT', 1), ('ORU_R01_ORDER_OBSERVATION', 2)),
+                (('ORU_R01_PATIENT_RESULT', 2), ('ORU_R01_ORDER_OBSERVATION', 1)),
+            },
+        )
+
+    def test_er7_message_with_autodetected_structure(self):
+        message = (
+            'MSH|^~\\&|SEND|SEND_FAC|REC|REC_FAC|20201101120000||ORU^R01^ORU_R01|1|P|2.5\r'
+            'PID|1||12345^^^HOSP^MR||DOE^JOHN\r'
+            'OBR|1||ORDER1|88304\r'
+            'OBX|1|ST|88304^TISSUE||TISSUE A\r'
+            'PID|2||67890^^^HOSP^MR||DOE^JANE\r'
+            'OBR|1||ORDER2|88305\r'
+            'OBX|1|ST|88305^TISSUE||TISSUE B\r'
+        )
+        assignments = find_group_assignments(message)
+        self.assertEqual(len(assignments), 1)
+
+        locations = assignments[0]
+        self.assertEqual([loc.name for loc in locations], ['MSH', 'PID', 'OBR', 'OBX', 'PID', 'OBR', 'OBX'])
+        self.assertEqual(
+            locations[6].groups,
+            (('ORU_R01_PATIENT_RESULT', 2), ('ORU_R01_ORDER_OBSERVATION', 1), ('ORU_R01_OBSERVATION', 1)),
+        )
+
+    def test_message_instance_as_reference(self):
+        message = hl7apy.core.Message('ORU_R01', version='2.5')
+        assignments = find_group_assignments(['MSH', 'OBR', 'OBX'], message)
+        self.assertEqual(len(assignments), 1)
+        self.assertEqual(
+            assignments[0][2].groups,
+            (('ORU_R01_PATIENT_RESULT', 1), ('ORU_R01_ORDER_OBSERVATION', 1), ('ORU_R01_OBSERVATION', 1)),
+        )
+
+    def test_unmatchable_segments_return_no_assignment(self):
+        self.assertEqual(find_group_assignments(['MSH', 'ZZZ'], 'ORU_R01', version='2.5'), [])
+        # a required segment is missing
+        self.assertEqual(find_group_assignments(['MSH', 'PID'], 'ORU_R01', version='2.5'), [])
+
+    def test_max_assignments(self):
+        # every OBR can open either a new ORDER_OBSERVATION group or a new
+        # PATIENT_RESULT group, so the number of valid assemblies grows exponentially
+        segments = ['MSH', 'PID'] + ['OBR', 'OBX'] * 10
+        self.assertRaises(ParserError, find_group_assignments, segments, 'ORU_R01', version='2.5', max_assignments=100)
+        assignments = find_group_assignments(segments[:4], 'ORU_R01', version='2.5', max_assignments=100)
+        self.assertEqual(len(assignments), 1)
 
 
 if __name__ == '__main__':

@@ -19,6 +19,7 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import re
+from collections import namedtuple
 
 from hl7apy import (
     check_encoding_chars,
@@ -32,6 +33,30 @@ from hl7apy.consts import N_SEPS, N_SEPS_27
 from hl7apy.core import Component, Field, Group, Message, Segment, SubComponent, is_base_datatype
 from hl7apy.exceptions import InvalidEncodingChars, InvalidName, MessageProfileNotFound, ParserError
 from hl7apy.validation import Validator
+
+
+class SegmentLocation(namedtuple('SegmentLocation', ('name', 'groups', 'occurrence'))):
+    """
+    Location of a segment within a message structure, as assigned by
+    :func:`find_group_assignments`.
+
+    .. attribute:: name
+
+        the segment name (e.g. ``'OBX'``)
+
+    .. attribute:: groups
+
+        a tuple of ``(group name, occurrence)`` pairs identifying the group instances the
+        segment belongs to, from the outermost to the innermost one. It is empty for
+        segments that are direct children of the message
+
+    .. attribute:: occurrence
+
+        the 1-based occurrence of the segment among the same-named children of the
+        innermost group (or of the message)
+    """
+
+    __slots__ = ()
 
 
 def parse_message(
@@ -675,6 +700,178 @@ def parse_subcomponent(text, name=None, datatype='ST', version=None, validation_
         validation_level=validation_level,
         reference=reference,
     )
+
+
+def find_group_assignments(segments, reference=None, version=None, max_assignments=None):
+    r"""
+    Match the given segments against a message structure (schema-based import) and return
+    the possible group assignments.
+
+    Every segment is assigned to the group instances it belongs to and to its occurrence
+    within them, so that e.g. two ``OBX`` segments found in different ``ORDER_OBSERVATION``
+    groups of an ``ORU_R01`` message can be told apart. Optional elements that are missing
+    from the message are simply skipped and do not change the assignment of the following
+    segments. When more than one assignment satisfies the message structure, all of them
+    are returned, so that the ambiguity is preserved instead of committing to the first
+    match found.
+
+    :type segments: ``str`` or ``list``
+    :param segments: the ER7-encoded message or the ordered list of the segment names
+        (or :class:`Segment <hl7apy.core.Segment>` instances) to be assigned
+
+    :type reference: ``str`` or :class:`Message <hl7apy.core.Message>` or ``tuple``
+    :param reference: the message structure to match. It can be the name of the message
+        structure (e.g. ``'ORU_R01'``), a :class:`Message <hl7apy.core.Message>` instance
+        or a message structure reference as returned by
+        :func:`find_reference <hl7apy.find_reference>`. If ``None`` and `segments` is an
+        ER7-encoded message, the message structure is detected from the MSH segment
+
+    :type version: ``str``
+    :param version: the HL7 version (e.g. "2.5") used when `reference` is a message
+        structure name, or ``None`` to use the default
+        (see :func:`set_default_version <hl7apy.set_default_version>`)
+
+    :type max_assignments: ``int``
+    :param max_assignments: the maximum number of assignments to look for, or ``None``
+        for no limit. When the limit is exceeded, a :class:`ParserError
+        <hl7apy.exceptions.ParserError>` is raised, since the message structure is too
+        ambiguous to be enumerated (e.g. many repeatable groups that can be split into
+        several repeatable parent groups)
+
+    :return: a list of assignments. Every assignment is a tuple of :class:`SegmentLocation`
+        instances, one for every given segment, in the original order. An empty list is
+        returned when the segments cannot be matched with the message structure
+
+    >>> segments = ['MSH', 'PID', 'OBR', 'OBX', 'OBX', 'PID', 'OBR', 'OBX']
+    >>> assignments = find_group_assignments(segments, 'ORU_R01', version='2.5')
+    >>> len(assignments)
+    1
+    >>> for location in assignments[0]:
+    ...     print(location.name, location.groups, location.occurrence)
+    MSH () 1
+    PID (('ORU_R01_PATIENT_RESULT', 1), ('ORU_R01_PATIENT', 1)) 1
+    OBR (('ORU_R01_PATIENT_RESULT', 1), ('ORU_R01_ORDER_OBSERVATION', 1)) 1
+    OBX (('ORU_R01_PATIENT_RESULT', 1), ('ORU_R01_ORDER_OBSERVATION', 1), ('ORU_R01_OBSERVATION', 1)) 1
+    OBX (('ORU_R01_PATIENT_RESULT', 1), ('ORU_R01_ORDER_OBSERVATION', 1), ('ORU_R01_OBSERVATION', 2)) 1
+    PID (('ORU_R01_PATIENT_RESULT', 2), ('ORU_R01_PATIENT', 1)) 1
+    OBR (('ORU_R01_PATIENT_RESULT', 2), ('ORU_R01_ORDER_OBSERVATION', 1)) 1
+    OBX (('ORU_R01_PATIENT_RESULT', 2), ('ORU_R01_ORDER_OBSERVATION', 1), ('ORU_R01_OBSERVATION', 1)) 1
+
+    Without the second ``PID``, the second ``OBR`` can legitimately open either a new
+    ``ORDER_OBSERVATION`` group or a new ``PATIENT_RESULT`` group: both assemblies are
+    returned, since the ambiguity cannot be resolved from the segments alone
+
+    >>> ambiguous = ['MSH', 'PID', 'OBR', 'OBX', 'OBX', 'OBR', 'OBX']
+    >>> assignments = find_group_assignments(ambiguous, 'ORU_R01', version='2.5')
+    >>> len(assignments)
+    2
+    """
+    if isinstance(segments, str):
+        if reference is None:
+            _, reference, detected_version = get_message_info(segments)
+            if version is None:
+                version = detected_version
+        segments = [s[:3] for s in re.split(r'[\r\n]+', segments) if s.strip()]
+    else:
+        segments = [s.name if isinstance(s, Segment) else s for s in segments]
+
+    if reference is None:
+        raise ParserError('Cannot detect the message structure')
+    if isinstance(reference, Message):
+        structure = reference.reference
+    elif isinstance(reference, str):
+        structure = Message(reference, version=version).reference
+    else:
+        structure = reference
+
+    assignments = []
+    seen = set()
+    for placements in _iter_structure_matches(structure[1], segments):
+        locations = tuple(_placements_to_locations(placements))
+        if locations not in seen:
+            seen.add(locations)
+            assignments.append(locations)
+            if max_assignments is not None and len(assignments) > max_assignments:
+                raise ParserError(
+                    'Found more than {0} valid assignments: the message structure is too ambiguous'.format(
+                        max_assignments
+                    )
+                )
+    return assignments
+
+
+def _iter_structure_matches(children, segment_names):
+    """
+    Yield every placement tree that matches the whole list of segment names against
+    the given sequence of message structure children.
+    """
+    for placements, pos in _match_children(children, segment_names, 0):
+        if pos == len(segment_names):
+            yield placements
+
+
+def _match_children(children, segment_names, pos):
+    """
+    Yield ``(placements, position)`` pairs for one pass through the given sequence of
+    message structure children, starting at the given position.
+    """
+    if not children:
+        yield (), pos
+        return
+    (name, ref, (min_occ, max_occ), kind), rest = children[0], children[1:]
+    for placements, new_pos in _match_repetitions(name, ref, kind, min_occ, max_occ, segment_names, pos):
+        for rest_placements, end_pos in _match_children(rest, segment_names, new_pos):
+            yield placements + rest_placements, end_pos
+
+
+def _match_repetitions(name, ref, kind, min_occ, max_occ, segment_names, pos):
+    """
+    Yield ``(placements, position)`` pairs for every allowed number of repetitions
+    (between ``min_occ`` and ``max_occ``, -1 meaning unbounded) of the given element.
+    """
+    if min_occ <= 0:
+        yield (), pos
+    if max_occ == 0:
+        return
+    remaining_max = -1 if max_occ == -1 else max_occ - 1
+    for placement, new_pos in _match_single(name, ref, kind, segment_names, pos):
+        repetitions = _match_repetitions(name, ref, kind, min_occ - 1, remaining_max, segment_names, new_pos)
+        for more, end_pos in repetitions:
+            yield (placement,) + more, end_pos
+
+
+def _match_single(name, ref, kind, segment_names, pos):
+    """
+    Yield ``(placement, position)`` pairs for a single occurrence of the given element.
+    """
+    if kind == 'SEG':
+        if pos < len(segment_names) and segment_names[pos] == name:
+            yield ('SEG', name), pos + 1
+    else:  # kind == 'GRP'
+        for placements, new_pos in _match_children(ref[1], segment_names, pos):
+            if new_pos > pos:  # group instances that contain no segment are not created
+                yield ('GRP', name, placements), new_pos
+
+
+def _placements_to_locations(placements):
+    """
+    Convert a placement tree to a list of :class:`SegmentLocation` instances, computing
+    the 1-based occurrence of every group and segment within its parent.
+    """
+    locations = []
+
+    def visit(items, groups):
+        counters = {}
+        for item in items:
+            kind, name = item[0], item[1]
+            counters[kind, name] = occurrence = counters.get((kind, name), 0) + 1
+            if kind == 'SEG':
+                locations.append(SegmentLocation(name, groups, occurrence))
+            else:
+                visit(item[2], groups + ((name, occurrence),))
+
+    visit(placements, ())
+    return locations
 
 
 def _split_msh(content):

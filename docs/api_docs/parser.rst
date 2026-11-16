@@ -11,4 +11,6 @@ Parser
 .. autofunction:: parse_components
 .. autofunction:: parse_component
 .. autofunction:: parse_subcomponents
+.. autofunction:: find_group_assignments
+.. autoclass:: SegmentLocation
 
