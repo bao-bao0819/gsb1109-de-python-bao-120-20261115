@@ -1,3 +1,4 @@
+import functools
 import struct
 from datetime import datetime, timedelta
 import numpy as np
@@ -7,6 +8,7 @@ EPOCH = np.datetime64('1904-01-01 00:00:00', 's')
 _struct_pack = struct.pack
 
 
+@functools.total_ordering
 class TdmsTimestamp(object):
     """ A Timestamp from a TDMS file
 
@@ -35,6 +37,12 @@ class TdmsTimestamp(object):
 
     def __eq__(self, other):
         return self.seconds == other.seconds and self.second_fractions == other.second_fractions
+
+    def __lt__(self, other):
+        if not isinstance(other, TdmsTimestamp):
+            return NotImplemented
+        # Compare the integer fields only, so ordering keeps full precision
+        return (self.seconds, self.second_fractions) < (other.seconds, other.second_fractions)
 
     def as_datetime64(self, resolution='us'):
         """ Convert this timestamp to a numpy datetime64 object

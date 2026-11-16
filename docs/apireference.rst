@@ -102,6 +102,17 @@ Timestamps
 .. autoclass:: TimestampArray()
   :members:
 
+Exporting Timestamps to Columnar Stores
+---------------------------------------
+
+.. module:: nptdms.export.columnar_export
+
+.. autofunction:: timestamps_to_columnar
+
+.. autofunction:: columnar_to_timestamps
+
+.. autofunction:: timestamp_sort_indices
+
 Indices and Tables
 ------------------
 
