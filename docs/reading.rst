@@ -129,6 +129,32 @@ and your operating system will then page data in and out of memory as required::
     with tempfile.TemporaryDirectory() as temp_memmap_dir:
         tdms_file = TdmsFile.read(tdms_file_path, memmap_dir=temp_memmap_dir)
 
+Reading segment metadata
+------------------------
+
+A TDMS file is made of segments, and later segments often omit object metadata
+and reuse the raw data index from an earlier segment, or change the channel
+layout or switch between contiguous and interleaved data.
+The :attr:`~nptdms.TdmsFile.segment_metadata` property records the metadata
+that is effectively in place for each segment after resolving any inherited
+metadata, rather than only what is explicitly written in that segment::
+
+    for segment in tdms_file.segment_metadata:
+        print(segment.index, segment.interleaved, segment.list_source)
+        for obj in segment.objects:
+            print(obj.path, obj.number_values, obj.index_segment)
+
+Each :class:`~nptdms.reader.SegmentMetadata` records whether the segment is
+interleaved and the segment its object list came from (``list_source``), while
+each :class:`~nptdms.reader.ObjectSegmentMetadata` records the segment its raw
+data index was actually read from (``index_segment``).
+An explicit metadata update only changes the recorded layout for the segment
+containing the update and later segments; earlier segment snapshots are unchanged.
+Data is always decoded using the layout in effect for its own segment, so a later
+interleaving change does not affect how earlier segments are read.
+The per-segment metadata for a single channel is available from
+:meth:`~nptdms.TdmsChannel.get_segment_metadata`.
+
 Reading objects from part of a file
 -----------------------------------
 

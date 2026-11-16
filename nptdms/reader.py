@@ -41,6 +41,10 @@ class TdmsReader(object):
         self._prev_segment_objects = {}
         self.object_metadata = OrderedDict()
         self._segment_channel_offsets = {}
+        # Effective metadata in effect for each segment, in segment order
+        self.segment_metadata = []
+        # Maps an object path to the effective object metadata for each segment it appears in
+        self._object_segment_metadata = {}
         self.tdms_version = None
 
         if hasattr(tdms_file, "read"):
@@ -110,6 +114,8 @@ class TdmsReader(object):
             raise ValueError("Neither tdms_index file nor tdms file is available.")
 
         self._segments = []
+        self.segment_metadata = []
+        self._object_segment_metadata = {}
         segment_position = 0
         try:
             with Timer(log, "Read metadata"):
@@ -129,6 +135,7 @@ class TdmsReader(object):
                         segment.dependencies = self._get_dependencies(segment)
                     self._update_object_metadata(segment, record_byte_ranges)
                     self._update_object_properties(properties, segment if record_byte_ranges else None)
+                    self._record_segment_metadata(segment)
                     self._segments.append(segment)
                     previous_segment = segment
 
@@ -393,6 +400,47 @@ class TdmsReader(object):
                 if byte_ranges_segment is not None:
                     _add_segment(object_metadata, byte_ranges_segment)
 
+    def _record_segment_metadata(self, segment):
+        """ Record the metadata effectively in place for a segment
+
+        This resolves metadata inherited from earlier segments so that each
+        segment keeps the actual object list, raw data indexes and interleaving
+        used to read its data, along with the segment each raw data index
+        originated from. Explicit updates only change the recorded metadata for
+        the segment containing the update and later segments.
+        """
+        big_endian = bool(segment.toc_mask & toc_properties['kTocBigEndian'])
+        has_raw_data = bool(segment.toc_mask & toc_properties['kTocRawData'])
+        object_metadata = [
+            ObjectSegmentMetadata(
+                path=obj.path,
+                has_data=obj.has_data,
+                data_type=obj.data_type,
+                number_values=obj.number_values,
+                data_size=obj.data_size,
+                index_segment=obj.index_segment,
+                scaler_data_types=obj.scaler_data_types)
+            for obj in segment.ordered_objects]
+        segment_metadata = SegmentMetadata(
+            segment.index, segment.position, segment.effective_interleaving(),
+            big_endian, has_raw_data, segment.list_source, object_metadata)
+        self.segment_metadata.append(segment_metadata)
+        for obj_metadata in object_metadata:
+            self._object_segment_metadata.setdefault(obj_metadata.path, []).append(
+                (segment.index, obj_metadata))
+
+    def get_object_segment_metadata(self, path):
+        """ Get the effective metadata for an object across all segments
+
+        :param path: TDMS object path.
+        :returns: A list of ``(segment_index, ObjectSegmentMetadata)`` tuples,
+            one per segment whose effective object list contains the object.
+            ``index_segment`` on each entry identifies the segment the raw data
+            index was actually read from, which may be an earlier segment when
+            the structure was reused.
+        """
+        return list(self._object_segment_metadata.get(path, ()))
+
     def _get_dependencies(self, segment):
         """ Get the indexes of the earlier segments that are required to read the metadata of a segment
         """
@@ -531,6 +579,93 @@ class ObjectMetadata(object):
         # Runs of consecutive segment indexes that contain this object's data or metadata,
         # as (first, last) tuples
         self.segment_runs = []
+
+
+class SegmentMetadata(object):
+    """ The metadata that is effectively in place for a single TDMS segment
+
+    Later segments may omit metadata entirely or repeat an earlier structure,
+    in which case the effective object list and raw data indexes are inherited
+    from earlier segments. This records the resolved metadata actually used to
+    read the segment's data, rather than only the metadata explicitly written
+    in that segment.
+
+    :ivar index: Zero-based index of the segment within the file.
+    :ivar position: Byte position of the segment's lead in.
+    :ivar interleaved: Whether the segment's data is stored interleaved.
+    :ivar big_endian: Whether multi-byte values in the segment are big endian.
+    :ivar has_raw_data: Whether the segment contains a raw data section.
+    :ivar list_source: Index of the segment whose metadata produced the
+        effective object list used by this segment.
+    :ivar objects: List of :class:`ObjectSegmentMetadata` for the segment's
+        effective object list, in the order data is laid out.
+    """
+
+    __slots__ = ['index', 'position', 'interleaved', 'big_endian', 'has_raw_data',
+                 'list_source', 'objects']
+
+    def __init__(self, index, position, interleaved, big_endian, has_raw_data,
+                 list_source, objects):
+        self.index = index
+        self.position = position
+        self.interleaved = interleaved
+        self.big_endian = big_endian
+        self.has_raw_data = has_raw_data
+        self.list_source = list_source
+        self.objects = objects
+
+    def object(self, path):
+        """ Get the effective metadata for an object in this segment, or None
+        """
+        for segment_object in self.objects:
+            if segment_object.path == path:
+                return segment_object
+        return None
+
+    def __repr__(self):
+        return (
+            "SegmentMetadata(index=%d, position=%d, interleaved=%r, list_source=%d, objects=%d)" %
+            (self.index, self.position, self.interleaved, self.list_source, len(self.objects)))
+
+
+class ObjectSegmentMetadata(object):
+    """ The raw data index effectively in place for an object in a segment
+
+    An object's structure may be defined in an earlier segment and reused by
+    later segments that omit metadata. ``index_segment`` gives the segment
+    whose raw data index is actually in effect, which may differ from the
+    segment this metadata applies to.
+
+    :ivar path: TDMS object path.
+    :ivar has_data: Whether the object has raw data in this segment.
+    :ivar data_type: The object's data type, or None if it has no raw data index.
+    :ivar number_values: Number of values per chunk from the effective raw data index.
+    :ivar data_size: Size in bytes of one chunk of data from the effective raw data index.
+    :ivar index_segment: Index of the segment the raw data index was read from.
+    :ivar scaler_data_types: For DAQmx raw data, a mapping of scaler id to data
+        type from the effective metadata, otherwise None.
+    """
+
+    __slots__ = ['path', 'has_data', 'data_type', 'number_values', 'data_size',
+                 'index_segment', 'scaler_data_types']
+
+    def __init__(self, path, has_data, data_type, number_values, data_size,
+                 index_segment, scaler_data_types=None):
+        self.path = path
+        self.has_data = has_data
+        self.data_type = data_type
+        self.number_values = number_values
+        self.data_size = data_size
+        self.index_segment = index_segment
+        self.scaler_data_types = scaler_data_types
+
+    def __repr__(self):
+        return (
+            "ObjectSegmentMetadata(path=%r, has_data=%r, data_type=%s, "
+            "number_values=%d, index_segment=%r)" %
+            (self.path, self.has_data,
+             self.data_type.__name__ if self.data_type is not None else None,
+             self.number_values, self.index_segment))
 
 
 def _add_segment(obj, segment):

@@ -33,6 +33,12 @@ Reading TDMS Files
 .. autoclass:: nptdms.tdms.ChannelSegmentStatus()
   :members:
 
+.. autoclass:: nptdms.reader.SegmentMetadata()
+  :members:
+
+.. autoclass:: nptdms.reader.ObjectSegmentMetadata()
+  :members:
+
 .. autofunction:: merge_byte_ranges
 
 .. autofunction:: extract_segments

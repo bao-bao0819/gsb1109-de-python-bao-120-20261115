@@ -169,6 +169,29 @@ class TdmsFile(object):
         return self._tdms_version
 
     @property
+    def segment_metadata(self):
+        """ The metadata effectively in place for each segment, in segment order
+
+        Segments that omit metadata inherit their object list and raw data
+        indexes from earlier segments; each :class:`~nptdms.reader.SegmentMetadata`
+        entry records the resolved metadata used to read that segment, including
+        whether the data is interleaved and the segment each object's raw data
+        index originated from.
+
+        :rtype: List of :class:`~nptdms.reader.SegmentMetadata`.
+        """
+        return list(self._reader.segment_metadata)
+
+    def get_object_segment_metadata(self, path):
+        """ Get the effective per-segment metadata for an object
+
+        :param path: Full TDMS object path.
+        :returns: A list of ``(segment_index, ObjectSegmentMetadata)`` tuples,
+            one per segment whose effective object list contains the object.
+        """
+        return self._reader.get_object_segment_metadata(path)
+
+    @property
     def properties(self):
         """ Return the properties of this file as a dictionary
 
@@ -676,6 +699,21 @@ class TdmsChannel(object):
         for raw_data_chunk in self._read_channel_data_chunks():
             yield ChannelDataChunk(self, raw_data_chunk, channel_offset)
             channel_offset += len(raw_data_chunk)
+
+    def get_segment_metadata(self):
+        """ The raw data index effectively in place for this channel in each segment
+
+        A channel's structure is often omitted from later segments and reused
+        from an earlier one. Each returned entry records the segment the
+        metadata applies to along with the segment its raw data index was
+        actually read from (``index_segment``), so data can be decoded using the
+        layout that was in effect when it was written rather than the file's
+        final layout.
+
+        :returns: A list of ``(segment_index, ObjectSegmentMetadata)`` tuples,
+            one per segment whose effective object list contains this channel.
+        """
+        return self._reader.get_object_segment_metadata(self.path)
 
     def byte_ranges(self):
         """ Get the byte ranges of the file required to read this channel

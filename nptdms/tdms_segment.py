@@ -476,6 +476,33 @@ class TdmsSegment(object):
         else:
             raise ValueError("Cannot read interleaved segment containing channels with unsized types")
 
+    def effective_interleaving(self):
+        """ Resolved interleaving for the data reader used by this segment
+
+        This reflects the layout actually used to read the segment, not just
+        the table of contents flag: a single channel with an unsized type such
+        as strings is read as contiguous even when the interleaved flag is set.
+        Unlike :meth:`_have_interleaved_data`, this never raises for invalid
+        combinations of unsized types; the error is still raised when the data
+        is read. DAQmx segments report the value of their interleaved flag.
+        """
+        interleaved_flag = bool(self.toc_mask & toc_properties['kTocInterleavedData'])
+        if self._have_daqmx_objects():
+            return interleaved_flag
+        if not interleaved_flag:
+            return False
+
+        data_objects = [o for o in self.ordered_objects if o.has_data]
+        unsized_objects = [
+            o for o in data_objects if o.data_type is None or o.data_type.size is None]
+        if not unsized_objects:
+            return True
+        if len(unsized_objects) == 1 and len(data_objects) == 1:
+            return False
+        # An invalid combination of unsized types; keep the flag value in the
+        # recorded metadata, but reading the data will raise an error.
+        return True
+
     def _get_data_objects(self):
         if self.data_objects_cached is not None:
             return self.data_objects_cached
