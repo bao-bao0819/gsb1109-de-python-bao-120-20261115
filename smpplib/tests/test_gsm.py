@@ -4,7 +4,7 @@ import mock
 from pytest import mark, raises
 
 from smpplib import consts
-from smpplib.gsm import gsm_encode, make_parts, make_parts_encoded
+from smpplib.gsm import gsm_decode, gsm_encode, make_parts, make_parts_encoded
 
 
 @mark.parametrize('plaintext, encoded_text', [
@@ -13,6 +13,23 @@ from smpplib.gsm import gsm_encode, make_parts, make_parts_encoded
 ])
 def test_gsm_encode(plaintext, encoded_text):
     assert gsm_encode(plaintext) == encoded_text
+
+
+@mark.parametrize('plaintext', [
+    u'@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&\'()*+,-./0123456789:;<=>'
+    u'?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ`¿abcdefghijklmnopqrstuvwxyzäöñüà^€[]{}\\|~',
+])
+def test_gsm_decode_round_trip(plaintext):
+    assert gsm_decode(gsm_encode(plaintext)) == plaintext
+
+
+def test_gsm_decode_escape_pair():
+    assert gsm_decode(b'\x1b\x65') == u'€'
+    assert gsm_decode(b'\x1b\x14') == u'^'
+
+
+def test_gsm_decode_dangling_escape():
+    assert gsm_decode(b'abc\x1b') == u'abc�'
 
 
 @mark.parametrize('plaintext', [

@@ -1,3 +1,10 @@
+### `Unreleased`
+
+* New: `smpplib.reassembly` joins concatenated SMS from UDH (8/16-bit
+  references), SAR parameters or explicit archive fields, preserving missing
+  and duplicate positions and reporting same-position payload conflicts.
+* New: `gsm_decode` decodes the GSM 7-bit alphabet used by `gsm_encode`.
+
 ### `2.2.1`
 
 * Fix: split message detection #182 #184 (@fpalamour)

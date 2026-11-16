@@ -4,6 +4,20 @@ import random
 import six
 
 from smpplib import consts, exceptions
+from smpplib.reassembly import (  # noqa: F401
+    MultipartReassembler,
+    ReassembledMessage,
+    Reassembler,
+    ReassemblyResult,
+    join_parts,
+    reassemble,
+    reassemble_joined,
+    reassemble_message,
+    reassemble_messages,
+    reassemble_one,
+    reassemble_parts,
+    reassemble_text,
+)
 
 
 def make_parts(text, encoding=consts.SMPP_ENCODING_DEFAULT, use_udhi=True):
@@ -60,6 +74,43 @@ def gsm_encode(plaintext):
         )
     except ValueError:
         raise UnicodeError(plaintext)
+
+
+def gsm_decode(encoded_text, errors='replace'):
+    """Decode the default GSM 7-bit alphabet used by :func:`gsm_encode`.
+
+    The decoder deliberately works on a complete byte sequence.  An escape
+    octet (0x1b) and the octet following it may be split between two SMS
+    parts; joining the parts before calling this function keeps the pair
+    together.
+    """
+    text = []
+    index = 0
+    length = len(encoded_text)
+
+    while index < length:
+        octet = six.indexbytes(encoded_text, index)
+        index += 1
+        escaped = False
+
+        if octet == 0x1b:
+            if index >= length:
+                text.append(u'�')
+                break
+            octet = 0x80 + six.indexbytes(encoded_text, index)
+            index += 1
+            escaped = True
+        elif octet >= 0x80:
+            text.append(u'�')
+            continue
+
+        character = GSM_CHARACTER_TABLE[octet]
+        if escaped and character == u'`':
+            text.append(u'�')
+        else:
+            text.append(character)
+
+    return u''.join(text)
 
 
 # Map GSM encoding into a tuple of encode function, maximum single message size and a part size.
