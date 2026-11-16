@@ -103,6 +103,13 @@ class TdmsReader(object):
         if self._index_file is not None:  # generally try to read metadata from index file because it is faster
             file = self._index_file
             reading_index_file = True
+            if self._file is not None and not self._verify_index_file():
+                # The index file doesn't match the data file, for example if they
+                # originate from different uploads. Fall back to reading metadata
+                # from the data file so that valid data is not lost and truncated
+                # data is not padded out based on the index.
+                file = self._file
+                reading_index_file = False
         elif self._file is not None:  # fallback if only a data file is supplied
             file = self._file
             reading_index_file = False
@@ -349,6 +356,93 @@ class TdmsReader(object):
                   next_segment_pos - data_position)
 
         return segment_position, toc_mask, data_position, next_segment_pos, segment_incomplete
+
+    def _verify_index_file(self):
+        """ Verify that the index file matches the data file, so that it is safe
+            to read metadata from the index file and use it for random access to data.
+
+            The segment boundaries and object metadata in the index file are checked
+            against the data file, and the amount of raw data described by the index
+            is checked against the actual size of the data file.
+
+        :returns: True if the index file matches the data file and can be used.
+        """
+        mismatch_reason = None
+        last_segment_complete = True
+        segment_position = 0
+        try:
+            self._index_file.seek(0, os.SEEK_SET)
+            self._file.seek(0, os.SEEK_SET)
+            while True:
+                index_lead_in = self._index_file.read(28)
+                if len(index_lead_in) == 0:
+                    # Reached the end of the index file
+                    break
+                if len(index_lead_in) < 28:
+                    mismatch_reason = "the index file ends part way through a segment lead in"
+                    break
+                if index_lead_in[:4] != b'TDSh':
+                    mismatch_reason = (
+                        "the segment at index file position %d does not start with TDSh"
+                        % (self._index_file.tell() - 28))
+                    break
+
+                toc_mask = _struct_unpack('<l', index_lead_in[4:8])[0]
+                endianness = '>' if (toc_mask & toc_properties['kTocBigEndian']) else '<'
+                (version, next_segment_offset, raw_data_offset) = _struct_unpack(
+                    endianness + 'lQQ', index_lead_in[8:28])
+
+                # Check the segment boundary and lead in against the data file
+                self._file.seek(segment_position, os.SEEK_SET)
+                data_lead_in = self._file.read(28)
+                if len(data_lead_in) < 28 or data_lead_in[:4] != b'TDSm':
+                    mismatch_reason = (
+                        "there is no matching segment at position %d of the data file" % segment_position)
+                    break
+                if data_lead_in[4:] != index_lead_in[4:]:
+                    mismatch_reason = (
+                        "the segment lead in at position %d differs between the index and data files"
+                        % segment_position)
+                    break
+
+                # Check the object metadata in this segment against the data file
+                index_metadata = self._index_file.read(raw_data_offset)
+                data_metadata = self._file.read(raw_data_offset)
+                if index_metadata != data_metadata:
+                    mismatch_reason = (
+                        "the object metadata at position %d differs between the index and data files"
+                        % segment_position)
+                    break
+
+                if next_segment_offset == 0xFFFFFFFFFFFFFFFF:
+                    # The final segment size is unknown so there are no further
+                    # segment boundaries to verify
+                    last_segment_complete = False
+                    data_position = segment_position + 28 + raw_data_offset
+                    if self._data_file_size is not None and self._data_file_size < data_position:
+                        mismatch_reason = "the data file is truncated within the final segment"
+                    break
+                next_segment_pos = segment_position + 28 + next_segment_offset
+                if self._data_file_size is not None and next_segment_pos > self._data_file_size:
+                    mismatch_reason = (
+                        "the index file describes more data than is present in the data file, "
+                        "the data file appears to be truncated")
+                    break
+                segment_position = next_segment_pos
+
+            if mismatch_reason is None and last_segment_complete and self._data_file_size is not None \
+                    and segment_position != self._data_file_size:
+                mismatch_reason = "the data file contains data beyond the last segment in the index file"
+        finally:
+            self._index_file.seek(0, os.SEEK_SET)
+            self._file.seek(0, os.SEEK_SET)
+
+        if mismatch_reason is not None:
+            log.warning(
+                "The tdms_index file does not match the tdms data file: %s. "
+                "Falling back to reading metadata from the data file.", mismatch_reason)
+            return False
+        return True
 
     def _verify_segment_start(self, segment):
         """ When reading data for a segment, check for the TDSm tag at the start of the segment in an attempt

@@ -519,8 +519,9 @@ def test_read_file_passed_as_pathlib_path():
         compare_arrays(channel_obj.data, expected_channel_data)
 
 
-def test_read_with_mismatching_index_file():
-    """ Test that reading data when the index file doesn't match the data file raises an error
+def test_read_with_mismatching_index_file(caplog):
+    """ Test that when the index file doesn't match the data file, the index file
+        is ignored and the data is read from the data file
     """
 
     test_file = GeneratedFile()
@@ -570,12 +571,81 @@ def test_read_with_mismatching_index_file():
             copyfile(tdms_file_with_index_path + '_index', new_index_file)
             try:
                 tdms_file.file.close()
-                with pytest.raises(ValueError) as exc_info:
-                    _ = TdmsFile.read(tdms_file.name)
-                assert 'Check that the tdms_index file matches the tdms data file' in str(exc_info.value)
+                with caplog.at_level(logging.WARNING):
+                    tdms_data = TdmsFile.read(tdms_file.name)
+                assert "The tdms_index file does not match the tdms data file" in caplog.text
+                compare_arrays(tdms_data['group']['channel1'].data, np.array([1, 2, 1, 2], dtype=np.int32))
+                compare_arrays(tdms_data['group']['channel2'].data, np.array([3, 4, 3, 4], dtype=np.int32))
             finally:
                 os.remove(new_index_file)
                 os.remove(tdms_file.name)
+
+
+def test_read_with_index_file_describing_more_data_than_present(caplog):
+    """ Test that a truncated data file is not padded out based on a complete index file
+    """
+    test_file = GeneratedFile()
+    test_file.add_segment(
+        ("kTocMetaData", "kTocRawData", "kTocNewObjList"),
+        segment_objects_metadata(
+            channel_metadata("/'group'/'channel1'", 3, 4),
+            channel_metadata("/'group'/'channel2'", 3, 4),
+        ),
+        "01 00 00 00" "02 00 00 00" "03 00 00 00" "04 00 00 00"
+        "05 00 00 00" "06 00 00 00" "07 00 00 00" "08 00 00 00"
+    )
+
+    with test_file.get_tempfile_with_index() as tdms_file_path:
+        # Truncate the data file so it contains less data than the index describes
+        with open(tdms_file_path, 'rb') as f:
+            full_data = f.read()
+        with open(tdms_file_path, 'wb') as f:
+            f.write(full_data[:-2 * 4])
+
+        with caplog.at_level(logging.WARNING):
+            tdms_data = TdmsFile.read(tdms_file_path)
+        assert "The tdms_index file does not match the tdms data file" in caplog.text
+        compare_arrays(tdms_data['group']['channel1'].data, np.array([1, 2, 3, 4], dtype=np.int32))
+        compare_arrays(tdms_data['group']['channel2'].data, np.array([5, 6], dtype=np.int32))
+
+
+def test_read_with_index_file_missing_last_segment(caplog):
+    """ Test that data in segments beyond those described by the index file is not lost
+    """
+    test_file = GeneratedFile()
+    test_file.add_segment(
+        ("kTocMetaData", "kTocRawData", "kTocNewObjList"),
+        segment_objects_metadata(
+            channel_metadata("/'group'/'channel1'", 3, 2),
+            channel_metadata("/'group'/'channel2'", 3, 2),
+        ),
+        "01 00 00 00" "02 00 00 00"
+        "03 00 00 00" "04 00 00 00"
+    )
+    test_file.add_segment(
+        ("kTocMetaData", "kTocRawData", "kTocNewObjList"),
+        segment_objects_metadata(
+            channel_metadata("/'group'/'channel1'", 3, 2),
+            channel_metadata("/'group'/'channel2'", 3, 2),
+        ),
+        "05 00 00 00" "06 00 00 00"
+        "07 00 00 00" "08 00 00 00"
+    )
+
+    with test_file.get_tempfile_with_index() as tdms_file_path:
+        # Truncate the index file so it only describes the first segment
+        with open(tdms_file_path + '_index', 'rb') as f:
+            lead_in = f.read(28)
+            raw_data_offset = int.from_bytes(lead_in[20:28], 'little')
+            index_first_segment = lead_in + f.read(raw_data_offset)
+        with open(tdms_file_path + '_index', 'wb') as f:
+            f.write(index_first_segment)
+
+        with caplog.at_level(logging.WARNING):
+            tdms_data = TdmsFile.read(tdms_file_path)
+        assert "The tdms_index file does not match the tdms data file" in caplog.text
+        compare_arrays(tdms_data['group']['channel1'].data, np.array([1, 2, 5, 6], dtype=np.int32))
+        compare_arrays(tdms_data['group']['channel2'].data, np.array([3, 4, 7, 8], dtype=np.int32))
 
 
 def test_get_len_of_file():
