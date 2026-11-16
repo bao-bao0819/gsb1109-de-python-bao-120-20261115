@@ -23,6 +23,7 @@ HL7apy - core classes
 """
 
 import collections
+import copy
 import datetime
 import importlib
 import re
@@ -880,6 +881,32 @@ class Element:
             return self.children.get(name)
         else:
             raise AttributeError(name)
+
+    def __deepcopy__(self, memo):
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for key, value in self.__dict__.items():
+            if key in ('children', 'parent', 'traversal_parent'):
+                continue
+            setattr(result, key, copy.deepcopy(value, memo))
+        result._parent = None
+        result._traversal_parent = None
+        children = ElementList(result)
+        for child in self.children:
+            copied = copy.deepcopy(child, memo)
+            copied._parent = result
+            copied._traversal_parent = None
+            children.list.append(copied)
+            children.indexes.setdefault(copied.name, []).append(copied)
+        for name, traversal_children in self.children.traversal_indexes.items():
+            for child in traversal_children:
+                copied = copy.deepcopy(child, memo)
+                copied._parent = None
+                copied._traversal_parent = result
+                children.traversal_indexes.setdefault(name, []).append(copied)
+        result.children = children
+        return result
 
     def __setattr__(self, name, value):
         if name in self.cls_attrs:

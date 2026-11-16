@@ -317,6 +317,34 @@ def load_message_profile(path):
     return mp
 
 
+def anonymize_message(message, policy, deep_copy=True, in_place=None):
+    """
+    Anonymize an HL7 message according to a policy declared on full schema paths
+
+    See :mod:`hl7apy.anonymization` for the policy format and for the
+    constraints handled by the replacement values.
+    """
+    from hl7apy.anonymization import anonymize_message as _anonymize_message
+
+    return _anonymize_message(message, policy, deep_copy=deep_copy, in_place=in_place)
+
+
+def anonymize_er7(message, policy):
+    """
+    Anonymize an ER7-encoded message and return the anonymized ER7 string
+    """
+    from hl7apy.anonymization import anonymize_er7 as _anonymize_er7
+
+    return _anonymize_er7(message, policy)
+
+
+def anonymize(message, policy, deep_copy=True, in_place=None):
+    """
+    Anonymize an HL7 message according to a policy declared on full schema paths
+    """
+    return anonymize_message(message, policy, deep_copy=deep_copy, in_place=in_place)
+
+
 def _discover_libraries():
     current_dir = os.path.dirname(__file__)
     return {o[1:].replace("_", "."): "hl7apy.{}".format(o) for o in os.listdir(current_dir) if o.startswith("v2_")}

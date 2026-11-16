@@ -15,5 +15,6 @@ HL7apy API documentation.
     factories
     exceptions
     validation
+    anonymization
     mllp
     utils

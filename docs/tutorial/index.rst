@@ -535,6 +535,49 @@ Validation of Z elements follow the same rules of the other elements. So for exa
   >>> f.value = 'abc^def'
   >>> f.validate() # False
 
+Anonymization
+-------------
+
+The :mod:`hl7apy.anonymization` module replaces selected values with stable
+pseudonyms. The policy declares the target fields by their full schema path,
+from the message down to the field, component or subcomponent to anonymize:
+
+.. code-block:: python
+
+  >>> from hl7apy.anonymization import anonymize_message
+  >>> policy = {
+  ...     'ADT_A01.PID.PID_5.PID_5_2': None,  # only the given name
+  ...     'ADT_A01.PID.PID_7': None,          # the whole date of birth
+  ...     'ADT_A01.NK1.NK1_2': None,          # every next of kin name
+  ... }
+  >>> anonymized = anonymize_message(message, policy)
+
+The original message is not modified; a deep copy is returned. Paths are
+matched against the actual structure of the message, so repeating groups,
+repeated fields and fields of dynamic (``varies``) datatype are supported:
+``PID_13[2]`` selects only the second occurrence of a repeated field, while
+``PID_13`` selects them all, and ``OBX.OBX_5`` matches the observation value
+whatever its runtime datatype is.
+
+A value that also appears in a different, non-target path is left untouched,
+because rules are applied by position in the tree and not by textual search.
+The same value always receives the same token, and different values receive
+different tokens.
+
+When the target element is constrained, the replacement respects the
+constraint, so the result still validates against the message structure: the
+maximum length is never exceeded, fields bound to an HL7 table receive a
+member of that table, numeric fields receive a numeric value with the same
+number of digits and date/time fields a valid value with the same precision.
+An explicit replacement that violates a constraint (e.g. a word assigned to a
+numeric field, or a string longer than the field) is replaced by a generated
+value that fits the constraint, so the output remains usable.
+
+A policy value can be a string (used as the token), ``None`` to generate a
+stable token, or a callable receiving the original text and the element and
+returning the replacement. See :class:`hl7apy.anonymization.AnonymizationPolicy`
+for the ``prefix`` and ``salt`` options.
+
 MLLP Server implementation
 --------------------------
 
