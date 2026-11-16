@@ -24,7 +24,7 @@ import struct
 
 import six
 
-from smpplib import consts, exceptions, pdu
+from smpplib import consts, exceptions, message_ids, pdu
 from smpplib.ptypes import flag, ostr
 
 logger = logging.getLogger('smpplib.command')
@@ -94,6 +94,9 @@ class Command(pdu.PDU):
         super(Command, self).__init__(**kwargs)
 
         self.allow_unknown_opt_params = allow_unknown_opt_params
+        self.message_id_version = kwargs.get('message_id_version')
+        self.message_id_gateway = kwargs.get('message_id_gateway')
+        self.message_id_rules = kwargs.get('message_id_rules')
 
         self.command = command
         if need_sequence and (kwargs.get('sequence') is None):
@@ -349,6 +352,39 @@ class Command(pdu.PDU):
     def field_exists(self, field):
         """Return True if field exists, False otherwise"""
         return hasattr(self.params, field)
+
+    def _message_id_kwargs(self, **kwargs):
+        """Return normalization options shared by the message ID helpers."""
+        kwargs.setdefault('version', self.message_id_version)
+        kwargs.setdefault('gateway', self.message_id_gateway)
+        kwargs.setdefault(
+            'rules',
+            self.message_id_rules
+            if self.message_id_rules is not None
+            else message_ids.default_rules(),
+        )
+        return kwargs
+
+    def normalize_message_id(self, value, field=None, **kwargs):
+        """Normalize one message ID using the declared, versioned rules.
+
+        The returned :class:`smpplib.message_ids.NormalizedMessageId` keeps
+        the original value in ``raw``; the PDU attribute is not modified.
+        """
+        return message_ids.normalize_message_id(
+            value, field=field, **self._message_id_kwargs(**kwargs))
+
+    def normalized_message_id(self, field='message_id'):
+        """Normalize the PDU's ``message_id`` attribute, if present."""
+        value = getattr(self, 'message_id', None)
+        if value is None:
+            return None
+        return self.normalize_message_id(value, field=field)
+
+    @property
+    def message_id_normalized(self):
+        """The PDU's ``message_id`` normalized under the declared rules."""
+        return self.normalized_message_id('message_id')
 
     def field_is_optional(self, field):
         """Return True if field is optional, False otherwise"""
@@ -748,6 +784,16 @@ class SubmitSMResp(Command):
         super(SubmitSMResp, self).__init__(command, need_sequence=False, **kwargs)
         self._set_vars(**(dict.fromkeys(self.params)))
 
+    def normalized_message_ids(self):
+        """Return normalized candidates for this submit response."""
+        return message_ids.submit_message_ids(
+            self, **self._message_id_kwargs())
+
+    def correlate(self, receipts, **kwargs):
+        """Correlate this submit response with delivery receipts."""
+        return message_ids.correlate_message_ids(
+            [self], receipts, **self._message_id_kwargs(**kwargs))
+
 
 class DeliverSM(SubmitSM):
     """deliver_sm command class, similar to submit_sm
@@ -819,6 +865,40 @@ class DeliverSM(SubmitSM):
     def __init__(self, command, **kwargs):
         super(DeliverSM, self).__init__(command, **kwargs)
         self._set_vars(**(dict.fromkeys(self.params)))
+
+    @property
+    def message_id_normalized(self):
+        """The receipt's ``id:`` value normalized under the declared rules."""
+        values = message_ids.receipt_message_ids(
+            self, **self._message_id_kwargs())
+        for value in values:
+            if value.field == 'receipt_text_id':
+                return value
+        return values[0] if values else None
+
+    @property
+    def receipted_message_id_normalized(self):
+        """The ``receipted_message_id`` TLV normalized under the rules."""
+        value = getattr(self, 'receipted_message_id', None)
+        if value is None:
+            return None
+        return self.normalize_message_id(value, field='receipted_message_id')
+
+    def receipt(self):
+        """Parse the delivery receipt text into its standard fields."""
+        return message_ids.parse_receipt_text(
+            getattr(self, 'message_payload', None)
+            or getattr(self, 'short_message', None) or b'')
+
+    def normalized_message_ids(self):
+        """Return normalized candidates from TLV and receipt text."""
+        return message_ids.receipt_message_ids(
+            self, **self._message_id_kwargs())
+
+    def correlate(self, submit_responses, **kwargs):
+        """Correlate this delivery receipt with submit responses."""
+        return message_ids.correlate_message_ids(
+            submit_responses, [self], **self._message_id_kwargs(**kwargs))
 
 
 class DeliverSMResp(SubmitSMResp):

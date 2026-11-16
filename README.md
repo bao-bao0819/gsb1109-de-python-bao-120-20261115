@@ -79,3 +79,46 @@ generator = mymodule.PersistentSequenceGenerator()
 client = smpplib.client.Client('example.com', SOMEPORTNUMBER, sequence_generator=generator)
 ...
 ```
+
+## Message ID normalization and receipts
+
+Gateways may return the same message identifier in different representations:
+a decimal number in `submit_sm_resp`, a hexadecimal `receipted_message_id`
+TLV in a delivery receipt, and a plain textual identifier in the receipt
+text. `smpplib.message_ids` normalizes those representations using explicit,
+versioned rules and correlates submit responses with delivery receipts.
+
+```python
+from smpplib import message_ids
+
+rules = message_ids.MessageIdRules({
+    'versions': {
+        '1.0': {'receipted_message_id': 'hex'},
+        '2.0': {'receipted_message_id': 'hex'},
+    },
+})
+client = smpplib.client.Client(
+    'example.com', SOMEPORTNUMBER,
+    message_id_version='2.0',
+    message_id_gateway='gateway-a',
+    message_id_rules=rules,
+)
+
+result = client.correlate_message_ids(submit_responses, receipts)
+for link in result.linked:
+    print(link.message_id, link.raw_submit, link.raw_receipt)
+for unmatched in result.unmatched:
+    print(unmatched.raw, unmatched.field, unmatched.reason)
+```
+
+`gateway-a` is recorded on each normalized value; gateway-specific overrides use
+`MessageIdRules({'gateways': {'gateway-a': {'receipt_text.id': 'text'}}})`.
+
+Rules apply only when they declare a format. An all-digit value is treated as
+decimal, a textual value stays text, and a hex-looking string is **not**
+converted unless its field rule or an explicit `0x` / `hex:` / `decimal:`
+prefix declares it as hexadecimal. Values that cannot be interpreted under
+their rule are listed in `result.unmatched` instead of being coerced. Every
+`NormalizedMessageId` keeps the untouched original in `.raw`, so it can be
+stored separately from the normalized value.
+

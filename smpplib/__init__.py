@@ -16,4 +16,4 @@
 # License along with this library; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-from smpplib import client, command, exceptions, pdu, smpp
+from smpplib import client, command, exceptions, message_id, message_ids, pdu, smpp

@@ -25,7 +25,7 @@ import socket
 import struct
 import warnings
 
-from smpplib import consts, exceptions, smpp
+from smpplib import consts, exceptions, message_ids, smpp
 
 
 class SimpleSequenceGenerator(object):
@@ -69,11 +69,17 @@ class Client(object):
         logger_name=None,
         ssl_context=None,
         allow_unknown_opt_params=None,
+        message_id_version=None,
+        message_id_gateway=None,
+        message_id_rules=None,
     ):
         self.host = host
         self.port = int(port)
         self._ssl_context = ssl_context
         self.timeout = timeout
+        self.message_id_version = message_id_version
+        self.message_id_gateway = message_id_gateway
+        self.message_id_rules = message_id_rules
         self.logger = logging.getLogger(logger_name or 'smpp.Client.{}'.format(id(self)))
         if sequence_generator is None:
             sequence_generator = SimpleSequenceGenerator()
@@ -261,6 +267,9 @@ class Client(object):
             raw_pdu,
             client=self,
             allow_unknown_opt_params=self.allow_unknown_opt_params,
+            message_id_version=self.message_id_version,
+            message_id_gateway=self.message_id_gateway,
+            message_id_rules=self.message_id_rules,
         )
 
         self.logger.debug('Read %s PDU', pdu.command)
@@ -423,3 +432,28 @@ class Client(object):
         qsm = smpp.make_pdu('query_sm', client=self, **kwargs)
         self.send_pdu(qsm)
         return qsm
+
+    def normalize_message_id(self, value, field=None, **kwargs):
+        """Normalize a message ID with this client's declared versioned rules."""
+        kwargs.setdefault('version', self.message_id_version)
+        kwargs.setdefault('gateway', self.message_id_gateway)
+        kwargs.setdefault(
+            'rules',
+            self.message_id_rules
+            if self.message_id_rules is not None
+            else message_ids.default_rules(),
+        )
+        return message_ids.normalize_message_id(value, field=field, **kwargs)
+
+    def correlate_message_ids(self, submit_responses, receipts, **kwargs):
+        """Correlate submit responses and receipts using this client's rules."""
+        kwargs.setdefault('version', self.message_id_version)
+        kwargs.setdefault('gateway', self.message_id_gateway)
+        kwargs.setdefault(
+            'rules',
+            self.message_id_rules
+            if self.message_id_rules is not None
+            else message_ids.default_rules(),
+        )
+        return message_ids.correlate_message_ids(
+            submit_responses, receipts, **kwargs)
