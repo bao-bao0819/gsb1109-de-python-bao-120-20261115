@@ -18,7 +18,7 @@ the OFX spec, to be found in the package namespace by
 
 from __future__ import annotations
 
-__all__ = ["Aggregate", "ElementList"]
+__all__ = ["Aggregate", "ElementList", "lenient_conversion"]
 
 
 # stdlib imports
@@ -27,6 +27,8 @@ import warnings
 import xml.etree.ElementTree as ET
 from collections import ChainMap
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from typing import (
     Any,
@@ -36,8 +38,28 @@ import ofxtools.models
 
 # local imports
 from ofxtools import Types
+from ofxtools.location import get_source_location, set_source_location
 
 logger = logging.getLogger(__name__)
+
+# During ``OFXTree.convert()`` a single malformed response transaction must not
+# discard the successful sibling accounts.  ``lenient_conversion()`` lets
+# ``TrnRs`` keep a degraded response wrapper instead of raising.
+_LENIENT: ContextVar[bool] = ContextVar("ofxtools_lenient_conversion", default=False)
+
+
+def lenient() -> bool:
+    """Whether document conversion may degrade malformed response wrappers."""
+    return _LENIENT.get()
+
+
+@contextmanager
+def lenient_conversion() -> Any:
+    token = _LENIENT.set(True)
+    try:
+        yield
+    finally:
+        _LENIENT.reset(token)
 
 
 class OFXAggregateError(ValueError):
@@ -73,6 +95,19 @@ class PrivateTagWarning(OFXAggregateWarning):
         future versions of the Open Financial Exchange specification. A period in
         a tag name indicates a private tag extension.
     """
+
+
+def _copy_source_locations(original: ET.Element, copied: ET.Element) -> None:
+    """Carry parser location metadata across ``deepcopy()`` in ``groom()``.
+
+    Only elements the parser actually saw need a location; this keeps the cost
+    proportional to the document rather than touching untouched copies.
+    """
+    location = get_source_location(original)
+    if location is not None:
+        set_source_location(copied, location)
+    for original_child, copied_child in zip(original, copied):
+        _copy_source_locations(original_child, copied_child)
 
 
 class Aggregate(list[Any]):
@@ -236,7 +271,10 @@ class Aggregate(list[Any]):
             raise OFXSpecError(f"ofxtools.models doesn't define {elem.tag}")
 
         logger.info(f"Converting <{elem.tag}> to {SubClass.__name__}")
+        location = get_source_location(elem)
         instance = SubClass._convert(elem)
+        if location is not None:
+            instance.source_location = location
         return instance  # type: ignore[no-any-return]
 
     @classmethod
@@ -247,7 +285,11 @@ class Aggregate(list[Any]):
         not the ``Aggregate`` base class.
         """
         if len(elem) == 0:
-            return cls()
+            instance = cls()
+            location = get_source_location(elem)
+            if location is not None:
+                instance.source_location = location
+            return instance
 
         # Hook to modify incoming ``ET.Element`` before conversion
         elem = cls.groom(elem)
@@ -328,7 +370,9 @@ class Aggregate(list[Any]):
         N.B. make sure to perform modifications on a copy.deepcopy(), in order
         to keep the input free of side effects!
         """
+        original = elem
         elem = deepcopy(elem)
+        _copy_source_locations(original, elem)
 
         for child in set(elem):
             if "." in child.tag:

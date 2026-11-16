@@ -729,11 +729,37 @@ def request_stmt(args: ArgsType) -> None:
 
     print(response.decode())
 
+    _warn_statement_responses(response)
+
     if args["write"]:
         write_config(args)
 
     if args["savepass"]:
         save_passwd(args, password)
+
+
+def _warn_statement_responses(markup: bytes) -> None:
+    """Report failed/partial statement responses without hiding good accounts."""
+    if not markup:
+        return
+    try:
+        parser = OFXTree()
+        parser.parse(BytesIO(markup))
+        ofx = parser.convert()
+    except (ParseError, ET.ParseError, OFXHeaderError) as exc:
+        logger.warning(f"Could not inspect statement responses: {exc}")
+        return
+    for response in ofx.responses:
+        if response.failed:
+            logger.warning(response.summary)
+            for issue in response.response_issues:
+                logger.warning(f"  {issue}")
+    if ofx.failed_responses:
+        logger.warning(
+            f"Kept {len(ofx.statements)} formal statement(s); "
+            f"{len(ofx.partial_responses)} failed response(s) carried partial data "
+            "and are not complete statement periods."
+        )
 
 
 def request_stmtend(args: ArgsType) -> None:
@@ -783,6 +809,8 @@ def request_stmtend(args: ArgsType) -> None:
         response = f.read()
 
     print(response.decode())
+
+    _warn_statement_responses(response)
 
     if args["write"]:
         write_config(args)

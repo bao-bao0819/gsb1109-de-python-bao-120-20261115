@@ -31,6 +31,7 @@ from ofxtools.models.invest.msgsets import (
     SECLISTMSGSRSV1,
 )
 from ofxtools.models.profile import PROFMSGSRQV1, PROFMSGSRSV1
+from ofxtools.models.response import StatementResponse, format_report
 from ofxtools.models.signon import SIGNONMSGSRQV1, SIGNONMSGSRSV1
 from ofxtools.models.signup import SIGNUPMSGSRQV1, SIGNUPMSGSRSV1
 from ofxtools.models.tax1099 import TAX1099MSGSRQV1, TAX1099MSGSRSV1
@@ -119,6 +120,7 @@ class OFX(Aggregate):
 
     @property
     def statements(self) -> Any:
+        """Formal statements from successful response transactions only."""
         stmts = []
         for msgs in (
             "bankmsgsrqv1",
@@ -132,3 +134,46 @@ class OFX(Aggregate):
             if msg:
                 stmts.extend(msg.statements)
         return stmts
+
+    @property
+    def responses(self) -> list[StatementResponse]:
+        """Per-response status/trust/location for every statement response.
+
+        Successful accounts remain ordinary ``statements``; failed or degraded
+        responses never appear there and are reported separately here.
+        """
+        responses: list[StatementResponse] = []
+        for msgs in ("bankmsgsrsv1", "creditcardmsgsrsv1", "invstmtmsgsrsv1"):
+            msg = getattr(self, msgs, None)
+            if msg:
+                responses.extend(msg.responses)
+        return responses
+
+    @property
+    def statement_responses(self) -> list[StatementResponse]:
+        return self.responses
+
+    @property
+    def response_report(self) -> list[dict[str, Any]]:
+        """JSON-compatible per-response status, trust scope and source location."""
+        return [response.to_dict() for response in self.responses]
+
+    @property
+    def statement_report(self) -> list[dict[str, Any]]:
+        return self.response_report
+
+    def response_summary(self) -> str:
+        """One readable line per response: scope, status and source location."""
+        return format_report(self.responses)
+
+    @property
+    def failed_responses(self) -> list[StatementResponse]:
+        return [response for response in self.responses if response.failed]
+
+    @property
+    def partial_responses(self) -> list[StatementResponse]:
+        return [response for response in self.responses if response.partial]
+
+    @property
+    def formal_responses(self) -> list[StatementResponse]:
+        return [response for response in self.responses if response.formal]

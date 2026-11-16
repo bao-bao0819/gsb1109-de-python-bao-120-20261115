@@ -72,6 +72,7 @@ from ofxtools.models.bank.wire import WIRETRNRQ, WIRETRNRS
 from ofxtools.models.bank.xfer import INTRATRNRQ, INTRATRNRS
 from ofxtools.models.base import Aggregate, ElementList
 from ofxtools.models.common import MSGSETCORE
+from ofxtools.models.response import StatementResponse, responses_of
 from ofxtools.Types import (
     Bool,
     Decimal,
@@ -131,20 +132,30 @@ class BANKMSGSRSV1(Aggregate):
     bankmailsyncrs = ListAggregate(BANKMAILSYNCRS)
 
     @property
-    def statements(self) -> Any:
-        stmts = []
-        for trnrs in self:
-            stmtrs = None
-            if isinstance(trnrs, STMTTRNRS):
-                stmtrs = trnrs.stmtrs
-            elif isinstance(trnrs, STMTENDTRNRS):
-                stmtrs = trnrs.stmtendrs
+    def responses(self) -> list[StatementResponse]:
+        """Every transaction response, including failed and partial ones."""
+        return list(responses_of(self))
 
-            if stmtrs is not None:
-                # Staple wrapper TRNUID, CLTCOOKIE onto STMTRS for convenience
-                stmtrs.trnuid = trnrs.trnuid
-                stmtrs.cltcookie = trnrs.cltcookie
-                stmts.append(stmtrs)
+    @property
+    def statements(self) -> Any:
+        """Formal statements only: successful responses with statement data.
+
+        Failed or degraded responses are available via ``responses``; they are
+        never promoted to a formal (zero-transaction) statement period.
+        """
+        stmts = []
+        for response in self.responses:
+            stmtrs = response.statement
+            if stmtrs is None or not response.formal:
+                continue
+
+            if not isinstance(response.wrapper, (STMTTRNRS, STMTENDTRNRS)):
+                continue
+
+            # Staple wrapper TRNUID, CLTCOOKIE onto STMTRS for convenience
+            stmtrs.trnuid = response.wrapper.trnuid
+            stmtrs.cltcookie = response.wrapper.cltcookie
+            stmts.append(stmtrs)
         return stmts
 
 
@@ -229,24 +240,25 @@ class CREDITCARDMSGSRSV1(Aggregate):
     ccstmtendtrnrs = ListAggregate(CCSTMTENDTRNRS)
 
     @property
-    def statements(self) -> Any:
-        stmts = []
-        for trnrs in self:
-            stmtrs = None
-            if isinstance(trnrs, CCSTMTTRNRS):
-                stmtrs = trnrs.ccstmtrs
-            else:
-                if not isinstance(trnrs, CCSTMTENDTRNRS):
-                    raise TypeError(
-                        f"Expected CCSTMTENDTRNRS, got {type(trnrs).__name__}"
-                    )
-                stmtrs = trnrs.ccstmtendrs
+    def responses(self) -> list[StatementResponse]:
+        """Every transaction response, including failed and partial ones."""
+        return list(responses_of(self))
 
-            if stmtrs is not None:
-                # Staple wrapper TRNUID, CLTCOOKIE onto STMTRS for convenience
-                stmtrs.trnuid = trnrs.trnuid
-                stmtrs.cltcookie = trnrs.cltcookie
-                stmts.append(stmtrs)
+    @property
+    def statements(self) -> Any:
+        """Formal statements only: successful responses with statement data."""
+        stmts = []
+        for response in self.responses:
+            stmtrs = response.statement
+            if stmtrs is None or not response.formal:
+                continue
+            if not isinstance(response.wrapper, (CCSTMTTRNRS, CCSTMTENDTRNRS)):
+                continue
+
+            # Staple wrapper TRNUID, CLTCOOKIE onto STMTRS for convenience
+            stmtrs.trnuid = response.wrapper.trnuid
+            stmtrs.cltcookie = response.wrapper.cltcookie
+            stmts.append(stmtrs)
         return stmts
 
 

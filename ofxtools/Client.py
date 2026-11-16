@@ -364,6 +364,39 @@ class OFXClient:
             raise ValueError(f"Expected 1 service URL, got {len(urls)}: {urls}")
         return str(urls.pop())
 
+    def request_statements_report(
+        self,
+        password: str,
+        *requests: RequestParam,
+        gen_newfileuid: bool = True,
+        timeout: float | None = None,
+        skip_profile: bool = False,
+    ) -> tuple[BinaryIO, list[dict[str, Any]]]:
+        """Send statement requests and return raw response plus a response report.
+
+        The report has one entry per account statement response: status,
+        trusted scope and original source location.  Failed responses are kept
+        out of the formal statement list returned by ``OFX.statements``.
+        """
+        response = self.request_statements(
+            password,
+            *requests,
+            gen_newfileuid=gen_newfileuid,
+            timeout=timeout,
+            skip_profile=skip_profile,
+        )
+        raw = response.read()
+        report = []
+        if raw:
+            try:
+                parser = OFXTree()
+                parser.parse(BytesIO(raw))
+                report = parser.convert().response_report
+            except (ValueError, SyntaxError) as exc:
+                logger.warning(f"Could not inspect statement responses: {exc}")
+        response.seek(0)
+        return response, report
+
     def request_statements(
         self,
         password: str,

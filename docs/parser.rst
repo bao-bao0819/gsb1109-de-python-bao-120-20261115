@@ -110,6 +110,55 @@ you're looking for a transaction unique identifier, you want ``tx.fitid``
 (which is a shortcut to ``tx.invtran.fitid``).
 
 
+Per-response status and partial data
+------------------------------------
+A single OFX download may contain many account responses, each with its own
+``<STATUS>``.  A server can fail one account while succeeding others, and it
+may still include a partially populated ``STMTRS`` in the failed block.
+
+``ofx.statements`` contains only *formal* statements: responses whose status
+succeeded and whose statement data was present.  A failed response is never
+turned into a zero-transaction statement period, even when it contains an
+empty transaction list.
+
+Every statement response, successful or not, is available from
+``ofx.responses`` (also ``ofx.response_report`` for JSON-compatible dicts):
+
+.. code:: python
+
+    In [27]: for response in ofx.responses:
+       ....:     print(response.trusted_scope, response.status, response.location)
+    complete code=0, severity=INFO, message=None OFX/BANKMSGSRSV1/STMTTRNRS[1]
+    partial code=2000, severity=ERROR, message='Statement incomplete' OFX/BANKMSGSRSV1/STMTTRNRS[2]
+    complete code=0, severity=INFO, message=None OFX/CREDITCARDMSGSRSV1/CCSTMTTRNRS[1]
+
+    In [28]: response = ofx.responses[1]
+    In [29]: response.partial_data  # failed data, explicitly labelled
+    In [30]: response.formal_facts  # None, because the response is not formal
+
+``trusted_scope`` is one of:
+
+- ``complete`` - the response succeeded and its statement is formal.  A
+  successful response with zero transactions is still complete: the zero is
+  an explicit fact from the account.
+- ``partial`` - the response failed (or could only be partly converted) but
+  carried usable data (account, transactions and/or balances).  This data is
+  exposed via ``partial_data`` and never counts as a formal period.
+- ``none`` - the response failed and carried no usable data.
+
+``location`` records the source of each response: document name, structural
+path (``OFX/BANKMSGSRSV1/STMTTRNRS[2]``), body line, column and character
+offset.  ``statement_location`` points at the contained ``*STMTRS``.
+
+Failed blocks do not abort decoding of their siblings.  If a response
+wrapper cannot be fully validated, it is retained in degraded form with its
+``conversion_error`` and the original subtree, while the successful accounts
+convert normally.
+
+The same information is available from the CLI's ``ofxget stmt`` output:
+failed responses are logged with their status and source location.
+
+
 Deviations from the OFX specification
 -------------------------------------
 For handling multicurrency transactions per OFX section 5.2, ``Aggregates``

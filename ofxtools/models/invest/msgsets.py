@@ -29,6 +29,7 @@ from ofxtools.models.invest.mail import (
 )
 from ofxtools.models.invest.securities import SECLIST, SECLISTTRNRQ, SECLISTTRNRS
 from ofxtools.models.invest.stmt import INVSTMTTRNRQ, INVSTMTTRNRS
+from ofxtools.models.response import StatementResponse, responses_of
 from ofxtools.Types import Bool, ListAggregate, SubAggregate, Unsupported
 
 
@@ -58,16 +59,24 @@ class INVSTMTMSGSRSV1(Aggregate):
     invmailsyncrs = ListAggregate(INVMAILSYNCRS)
 
     @property
+    def responses(self) -> list[StatementResponse]:
+        """Every transaction response, including failed and partial ones."""
+        return list(responses_of(self))
+
+    @property
     def statements(self) -> Any:
+        """Formal statements only: successful responses with statement data."""
         stmts = []
-        for trnrs in self:
-            if isinstance(trnrs, INVSTMTTRNRS):
-                stmtrs = trnrs.invstmtrs
-                if stmtrs is not None:
-                    # Staple wrapper TRNUID, CLTCOOKIE onto STMTRS for convenience
-                    stmtrs.trnuid = trnrs.trnuid
-                    stmtrs.cltcookie = trnrs.cltcookie
-                    stmts.append(stmtrs)
+        for response in self.responses:
+            stmtrs = response.statement
+            if stmtrs is None or not response.formal:
+                continue
+            if not isinstance(response.wrapper, INVSTMTTRNRS):
+                continue
+            # Staple wrapper TRNUID, CLTCOOKIE onto STMTRS for convenience
+            stmtrs.trnuid = response.wrapper.trnuid
+            stmtrs.cltcookie = response.wrapper.cltcookie
+            stmts.append(stmtrs)
         return stmts
 
 

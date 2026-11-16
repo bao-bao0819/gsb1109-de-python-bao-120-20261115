@@ -29,6 +29,7 @@ __all__ = ["OFXTree", "TreeBuilder", "ParseError"]
 
 
 # stdlib imports
+import bisect
 import contextlib
 import logging
 import re
@@ -37,7 +38,8 @@ from typing import Any, cast
 
 # local imports
 from ofxtools.header import OFXHeaderType, parse_header
-from ofxtools.models.base import Aggregate
+from ofxtools.location import index_paths
+from ofxtools.models.base import Aggregate, lenient_conversion
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +86,27 @@ class OFXTree(ET.ElementTree):
         # If no parser specified, create default `ofxtools.Parser.TreeBuilder`
         if parser is None:
             parser = TreeBuilder()
+
+        document = source if isinstance(source, str) else getattr(source, "name", None)
+        if hasattr(parser, "document"):
+            parser.document = document
+
         parser.feed(message)
 
         # ElementTree.TreeBuilder.close() returns the root.
         # Follow ElementTree API and stash as self._root (so all normal
         # ElementTree methods e.g. find() work normally on our subclass).
         self._root = cast(ET.Element, parser.close())
+
+        # Attach body offsets/line/column and structural paths to each element
+        # that the parser recorded.  Kept on the side so the ElementTree API
+        # (and serialized output) is unchanged.
+        locations = getattr(parser, "locations", None)
+        if isinstance(self._root, ET.Element) and isinstance(locations, dict):
+            index_paths(self._root, document, locations)
+        elif isinstance(self._root, ET.Element):
+            index_paths(self._root, document)
+
         logger.debug(f"Parsed Element tree root: {self._root}")
 
         return self._root
@@ -117,7 +134,8 @@ class OFXTree(ET.ElementTree):
         """
         if not isinstance(self._root, ET.Element):
             raise ValueError("Must first call parse() to have data to convert")
-        instance = Aggregate.from_etree(self._root)
+        with lenient_conversion():
+            instance = Aggregate.from_etree(self._root)
         return instance
 
 
@@ -128,6 +146,16 @@ class TreeBuilder(ET.TreeBuilder):
     Overrides ElementTree.TreeBuilder.feed() with a regex-based parser that
     handles both OFXv1(SGML) and OFXv2(XML).
     """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # ``document`` is the source name, if known; ``locations`` maps
+        # each element to its ``(offset, line, column)`` in the OFX body.
+        self.document: str | None = None
+        self.locations: dict[ET.Element, tuple[int, int, int]] = {}
+        self._position: tuple[int, int, int] | None = None
+        self._body = ""
+        self._newlines: list[int] = []
 
     # The body of an OFX document consists of a series of tags.
     # Each start tag may be followed by text (if a data-bearing element)
@@ -146,6 +174,13 @@ class TreeBuilder(ET.TreeBuilder):
         Iterate through all tags matched by regex.
         """
         logger.info("Building Element tree from markup body")
+        base = len(self._body)
+        # Track newline offsets incrementally, for line/column lookup.
+        self._newlines.extend(
+            base + n for n, char in enumerate(data) if char == "\n"
+        )
+        self._body += data
+
         for match in self.regex.finditer(data):
             try:
                 groupdict = match.groupdict()
@@ -167,6 +202,11 @@ class TreeBuilder(ET.TreeBuilder):
                 logger.debug(
                     f"Regex match tag='{tag}', text='{text}', closetag='{closetag}'"
                 )
+                offset = base + match.start()
+                line = bisect.bisect_left(self._newlines, offset) + 1
+                line_start = self._newlines[line - 2] + 1 if line > 1 else 0
+                column = offset - line_start + 1
+                self._position = (offset, line, column)
                 self._feedmatch(tag, text, closetag)
             except ParseError as err:
                 # Report the position of the error
@@ -201,7 +241,10 @@ class TreeBuilder(ET.TreeBuilder):
             - If regex captured closetag, it's an empty "aggregate"; pop it.
         """
         logger.debug(f"Pushing tag '{tag}'")
-        self.start(tag, {})
+        element = self.start(tag, {})
+        position = getattr(self, "_position", None)
+        if isinstance(element, ET.Element) and position is not None:
+            self.locations[element] = position
         if text:
             # OFX "element" i.e. data-bearing leaf
             logger.debug(f"Data text '{text}'")

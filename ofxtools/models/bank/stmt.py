@@ -265,6 +265,11 @@ class STMTRS(Aggregate):
     def balance(self) -> Any:
         return self.ledgerbal
 
+    @property
+    def response_status(self) -> Any:
+        """STATUS of the enclosing response, stapled by ``models.response``."""
+        return self.__dict__.get("response_status")
+
 
 class STMTTRNRQ(TrnRq):
     """OFX section 11.4.2.1"""

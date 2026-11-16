@@ -300,6 +300,11 @@ class INVSTMTRS(Aggregate):
     def balances(self) -> Any:
         return self.invbal
 
+    @property
+    def response_status(self) -> Any:
+        """STATUS of the enclosing response, stapled by ``models.response``."""
+        return self.__dict__.get("response_status")
+
 
 class INVSTMTTRNRQ(TrnRq):
     """OFX section 13.9.1.1"""
