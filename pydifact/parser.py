@@ -34,6 +34,7 @@ from pydifact.constants import (
 from pydifact.control import Characters
 from pydifact.exceptions import EDISyntaxError, NonConformantEDIWarning
 from pydifact.segments import Segment, SegmentFactory
+from pydifact.splitter import InterchangeSplitter
 from pydifact.token import Token
 from pydifact.tokenizer import Tokenizer
 
@@ -172,6 +173,34 @@ class Parser:
                 )
             except StopIteration:
                 break
+
+    def parse_interchanges(
+        self,
+        source: str | Iterable[str],
+    ) -> Iterator[list[Segment]]:
+        """Parse a stream of concatenated EDI interchanges, one by one.
+
+        Each interchange is parsed with the control characters of its own UNA
+        header (or the default characters, if it has none); the settings of a
+        previous interchange never affect the following ones. Every returned
+        segment gets its absolute character offset within the source assigned
+        to its `position` attribute, so its origin can be traced back.
+
+        Args:
+            source: The concatenated EDI interchanges, either as one string
+                or as an iterable of string chunks (e.g. read from a file).
+                Chunk boundaries are irrelevant, a chunk may even end right
+                behind a release character.
+
+        Yields:
+            list[Segment]: The segments of one interchange per iteration.
+        """
+        splitter = InterchangeSplitter(characters=self.characters)
+        for interchange, offsets in splitter.split(source):
+            segments = list(self.parse(interchange))
+            for segment, position in zip(segments, offsets):
+                segment.position = position
+            yield segments
 
     def _warn_non_conformant(self, message: str) -> None:
         """Emit a `NonConformantEDIWarning`, unless disabled via

@@ -571,6 +571,111 @@ class Interchange(AbstractSegmentsContainer):
         )
 
     @classmethod
+    def iter_from_str(
+        cls,
+        source: str | Iterable[str],
+        parser: Parser | None = None,
+        characters: Characters | None = None,
+        validate: bool = True,
+        warn_non_conformant: bool = True,
+    ) -> Iterator["Interchange"]:
+        """Yield the interchanges of a concatenated EDI stream, one by one.
+
+        Args:
+            source: The concatenated EDI interchanges, either as one string
+                or as an iterable of string chunks. Each interchange may have
+                its own UNA header with differing control characters.
+            parser: A parser to convert the tokens to segments; defaults to `Parser`.
+            characters: The default set of control characters, used for
+                interchanges without a UNA header.
+            validate: Whether to validate the content. If a `parser` is given,
+                its own `validate` setting applies to the parsed segments.
+            warn_non_conformant: Whether to emit a `NonConformantEDIWarning` for
+                accepted deviations from the EDIFACT specification. If a `parser`
+                is given, its own setting applies.
+
+        Yields:
+            Interchange: One instance per interchange found in the source.
+                The `position` attribute of each segment holds its absolute
+                character offset within the source.
+        """
+        if parser is None:
+            parser = Parser(
+                characters=characters,
+                validate=validate,
+                warn_non_conformant=warn_non_conformant,
+            )
+
+        for segments in parser.parse_interchanges(source):
+            yield cls.from_segments(
+                segments=segments,
+                characters=parser.characters,
+                validate=validate,
+                warn_non_conformant=parser.warn_non_conformant,
+            )
+
+    @classmethod
+    def iter_from_file(
+        cls,
+        file: str,
+        encoding: str = "iso8859-1",
+        chunk_size: int = 65536,
+        parser: Parser | None = None,
+        validate: bool = True,
+        warn_non_conformant: bool = True,
+    ) -> Iterator["Interchange"]:
+        """Yield the interchanges of a file of concatenated EDI interchanges.
+
+        The file is read in chunks of `chunk_size` characters, so even huge
+        files are processed interchange by interchange without loading them
+        completely into memory.
+
+        Args:
+            file : str
+                The full path to a file that contains concatenated EDI
+                interchanges.
+            encoding : str, default='iso8859-1'
+                The encoding to use when reading the file.
+            chunk_size : int, default=65536
+                The number of characters to read per chunk. Chunk boundaries
+                are irrelevant for the result, a chunk may even end right
+                behind a release character.
+            parser : Parser, optional
+                A parser to convert the tokens to segments.
+            validate : bool, default=True
+                Whether to validate the content. If a `parser` is given,
+                its own `validate` setting applies to the parsed segments.
+            warn_non_conformant : bool, default=True
+                Whether to emit a `NonConformantEDIWarning` for accepted
+                deviations from the EDIFACT specification. If a `parser` is
+                given, its own setting applies.
+
+        Yields:
+            Interchange
+                One instance per interchange found in the file.
+
+        Raises:
+            FileNotFoundError
+                If the specified file is not found.
+            LookupError
+                If the specified encoding is not recognized.
+        """
+        # codecs.lookup raises an LookupError if given codec was not found:
+        codecs.lookup(encoding)
+
+        def chunks() -> Iterator[str]:
+            with open(file, encoding=encoding) as f:
+                while chunk := f.read(chunk_size):
+                    yield chunk
+
+        return cls.iter_from_str(
+            chunks(),
+            parser=parser,
+            validate=validate,
+            warn_non_conformant=warn_non_conformant,
+        )
+
+    @classmethod
     def from_segments(
         cls,
         segments: Iterable[Segment],

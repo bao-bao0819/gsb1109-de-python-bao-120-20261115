@@ -95,6 +95,9 @@ class Segment:
     # the EDIFACT syntax version this (typed) segment class applies to
     version: str = EDI_DEFAULT_VERSION
     elements: list[Element] = []
+    # the absolute character offset of this segment within the parsed source,
+    # set when parsing (concatenated) interchanges; None if unknown
+    position: int | None = None
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)

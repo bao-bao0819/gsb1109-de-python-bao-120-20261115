@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]
 
+### Added
+- `Interchange.iter_from_str()` and `Interchange.iter_from_file()` parse files with multiple concatenated
+  interchanges one by one; each interchange is tokenized with the control characters of its own UNA header,
+  and `Segment.position` traces every segment back to its offset in the source
+
 ### Fixed
 - Honor `break_lines=True` after the UNA header when serializing an empty segment list.
 
