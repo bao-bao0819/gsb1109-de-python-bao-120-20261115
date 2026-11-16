@@ -41,6 +41,7 @@ from ._helpers import (
     write,
     write_points_cells,
 )
+from ._interpolate import InterpolationError, interpolate_frame
 from ._mesh import CellBlock, Mesh
 
 __all__ = [
@@ -83,6 +84,8 @@ __all__ = [
     "extension_to_filetypes",
     "Mesh",
     "CellBlock",
+    "InterpolationError",
+    "interpolate_frame",
     "ReadError",
     "WriteError",
     "topological_dimension",
