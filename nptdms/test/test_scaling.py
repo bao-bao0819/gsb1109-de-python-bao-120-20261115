@@ -4,7 +4,14 @@ import numpy as np
 import pytest
 
 from nptdms import types
-from nptdms.scaling import get_scaling, TableScaling
+from nptdms.scaling import (
+    CircularScalingReferenceError,
+    MissingScalingDependencyError,
+    RAW_DATA_INPUT_SOURCE,
+    get_scaling,
+    get_scaling_chain_info,
+    TableScaling,
+)
 
 
 def test_unsupported_scaling_type():
@@ -828,3 +835,223 @@ class StubDaqmxData(object):
     def __init__(self, scaler_data):
         self.data = None
         self.scaler_data = scaler_data
+
+
+def _linear_scale_properties(scale_index, input_source, slope=1.0, intercept=0.0):
+    return {
+        "NI_Scale[%d]_Scale_Type" % scale_index: "Linear",
+        "NI_Scale[%d]_Linear_Slope" % scale_index: slope,
+        "NI_Scale[%d]_Linear_Y_Intercept" % scale_index: intercept,
+        "NI_Scale[%d]_Linear_Input_Source" % scale_index: input_source,
+    }
+
+
+def test_scaling_chain_info_records_multilevel_chain():
+    """ Chain info records the actual scale order and input references """
+
+    properties = {
+        "NI_Number_Of_Scales": 3,
+        "NI_Scaling_Status": "unscaled",
+    }
+    properties.update(_linear_scale_properties(0, RAW_DATA_INPUT_SOURCE, 1.0, 1.0))
+    properties.update(_linear_scale_properties(1, 0, 2.0, 2.0))
+    properties.update(_linear_scale_properties(2, 1, 3.0, 3.0))
+
+    chain_info = get_scaling_chain_info(properties, {}, {})
+
+    assert chain_info is not None
+    assert chain_info.property_scope == "channel"
+    assert chain_info.status == "unscaled"
+    assert chain_info.already_scaled is False
+    assert chain_info.final_scale_index == 2
+    assert [scale.index for scale in chain_info.scales] == [0, 1, 2]
+    assert [scale.scale_type for scale in chain_info.scales] == ["Linear"] * 3
+    assert chain_info.scales[0].input_sources == (RAW_DATA_INPUT_SOURCE,)
+    assert chain_info.scales[1].input_sources == (0,)
+    assert chain_info.scales[2].input_sources == (1,)
+    assert chain_info.ordered_scale_indices() == [0, 1, 2]
+    assert chain_info.chain_path() == "raw -> 0(Linear) -> 1(Linear) -> 2(Linear)"
+    assert chain_info.is_valid()
+    assert chain_info.missing_dependencies() == []
+    assert chain_info.cycles() == []
+    assert chain_info.scales[1].parameters["Linear_Slope"] == 2.0
+    assert chain_info.scales[1].parameters["Linear_Y_Intercept"] == 2.0
+
+
+def test_scaling_chain_info_records_units_and_parameter_version():
+    """ Chain info records input/output units and parameter versions """
+
+    properties = {
+        "NI_Number_Of_Scales": 1,
+        "NI_Parameter_Version": "2023.1",
+        "unit_string": "degC",
+    }
+    properties.update(_linear_scale_properties(0, RAW_DATA_INPUT_SOURCE, 2.0, 10.0))
+    properties.update({
+        "NI_Scale[0]_Linear_Input_Unit": "V",
+        "NI_Scale[0]_Linear_Output_Unit": "degC",
+        "NI_Scale[0]_Linear_Parameter_Version": 3,
+    })
+
+    chain_info = get_scaling_chain_info(properties, {}, {})
+    scale_info = chain_info.scales[0]
+
+    assert chain_info.parameter_version == "2023.1"
+    assert chain_info.channel_unit == "degC"
+    assert chain_info.output_unit == "degC"
+    assert scale_info.input_unit == "V"
+    assert scale_info.output_unit == "degC"
+    assert scale_info.parameter_version == 3
+    # Structural properties are not duplicated in the parameter record
+    assert "Linear_Input_Source" not in scale_info.parameters
+    assert "Linear_Input_Unit" not in scale_info.parameters
+
+
+def test_scaling_chain_info_falls_back_to_channel_unit():
+    """ When the final scale has no output unit, the channel unit is used """
+
+    properties = {
+        "NI_Number_Of_Scales": 1,
+        "unit_string": "m/s",
+    }
+    properties.update(_linear_scale_properties(0, RAW_DATA_INPUT_SOURCE))
+
+    chain_info = get_scaling_chain_info(properties, {}, {})
+
+    assert chain_info.scales[0].output_unit is None
+    assert chain_info.output_unit == "m/s"
+
+
+def test_scaling_chain_info_for_add_scaling_records_both_inputs():
+    """ Add and subtract scales record both operand input sources in order """
+
+    properties = {
+        "NI_Number_Of_Scales": 1,
+        "NI_Scale[0]_Scale_Type": "Add",
+        "NI_Scale[0]_Add_Left_Operand_Input_Source": 0xFFFFFFFF,
+        "NI_Scale[0]_Add_Right_Operand_Input_Source": 0xFFFFFFFF,
+    }
+
+    chain_info = get_scaling_chain_info(properties, {}, {})
+    scale_info = chain_info.scales[0]
+
+    assert scale_info.scale_type == "Add"
+    assert scale_info.input_sources == (RAW_DATA_INPUT_SOURCE, RAW_DATA_INPUT_SOURCE)
+    assert chain_info.chain_path() == "raw, raw -> 0(Add)"
+
+
+def test_scaling_chain_info_for_daqmx_scaler():
+    """ Scales without a scale type are DAQmx raw scaler scales """
+
+    properties = {"NI_Number_Of_Scales": 1}
+
+    chain_info = get_scaling_chain_info(properties, {}, {})
+    scale_info = chain_info.scales[0]
+
+    assert scale_info.scale_type == "DaqMxScaler"
+    assert scale_info.input_sources == ()
+    assert chain_info.chain_path() == "0(DaqMxScaler)"
+
+
+def test_scaling_chain_info_scope_prefers_channel_then_group_then_file():
+    """ The scope records where the scaling properties came from """
+
+    properties = {"NI_Number_Of_Scales": 1}
+    properties.update(_linear_scale_properties(0, RAW_DATA_INPUT_SOURCE))
+
+    assert get_scaling_chain_info(properties, {}, {}).property_scope == "channel"
+    assert get_scaling_chain_info({}, properties, {}).property_scope == "group"
+    assert get_scaling_chain_info({}, {}, properties).property_scope == "file"
+    assert get_scaling_chain_info({}, {}, {}) is None
+
+
+def test_missing_dependency_keeps_chain_info_but_raises_on_scale():
+    """ A reference to an undefined scale is reported but metadata is kept """
+
+    properties = {
+        "NI_Number_Of_Scales": 1,
+        "NI_Scale[0]_Scale_Type": "Linear",
+        "NI_Scale[0]_Linear_Slope": 2.0,
+        "NI_Scale[0]_Linear_Y_Intercept": 10.0,
+        "NI_Scale[0]_Linear_Input_Source": 5,
+    }
+
+    multi_scaling = get_scaling(properties, {}, {})
+    chain_info = get_scaling_chain_info(properties, {}, {})
+
+    assert multi_scaling is not None
+    assert chain_info.missing_dependencies() == [(0, 5)]
+    assert not chain_info.is_valid()
+    assert "missing scale 5" in chain_info.chain_path()
+
+    data = StubTdmsData(np.array([1.0, 2.0, 3.0]))
+    with pytest.raises(MissingScalingDependencyError) as exc_info:
+        multi_scaling.scale(data)
+    message = str(exc_info.value)
+    assert "missing scale 5" in message
+    assert "0(Linear)" in message
+
+    with pytest.raises(MissingScalingDependencyError):
+        multi_scaling.get_dtype(types.DoubleFloat, None)
+
+
+def test_circular_reference_error_includes_the_cycle_path():
+    """ Cycles are detected and the error message contains the cycle path """
+
+    properties = {
+        "NI_Number_Of_Scales": 2,
+    }
+    properties.update(_linear_scale_properties(0, 1))
+    properties.update(_linear_scale_properties(1, 0))
+
+    multi_scaling = get_scaling(properties, {}, {})
+    chain_info = get_scaling_chain_info(properties, {}, {})
+
+    cycles = chain_info.cycles()
+    assert cycles == [[1, 0, 1]]
+    assert not chain_info.is_valid()
+
+    data = StubTdmsData(np.array([1.0, 2.0, 3.0]))
+    with pytest.raises(CircularScalingReferenceError) as exc_info:
+        multi_scaling.scale(data)
+    message = str(exc_info.value)
+    assert "1(Linear)" in message
+    assert "0(Linear)" in message
+
+
+def test_scaled_status_keeps_chain_info_without_applying_scales():
+    """ Already scaled data is never scaled again, but chain info remains """
+
+    properties = {
+        "NI_Number_Of_Scales": 1,
+        "NI_Scaling_Status": "scaled",
+    }
+    properties.update(_linear_scale_properties(0, RAW_DATA_INPUT_SOURCE, 2.0, 10.0))
+
+    assert get_scaling(properties, {}, {}) is None
+
+    chain_info = get_scaling_chain_info(properties, {}, {})
+    assert chain_info.already_scaled is True
+    assert chain_info.status == "scaled"
+    assert chain_info.scales[0].scale_type == "Linear"
+    assert chain_info.scales[0].parameters["Linear_Slope"] == 2.0
+
+
+def test_missing_dependency_does_not_corrupt_raw_data():
+    """ Raw channel data remains available when applying scaling fails """
+
+    raw_array = np.array([1.0, 2.0, 3.0])
+    data = StubTdmsData(raw_array)
+    properties = {
+        "NI_Number_Of_Scales": 1,
+        "NI_Scale[0]_Scale_Type": "Linear",
+        "NI_Scale[0]_Linear_Slope": 2.0,
+        "NI_Scale[0]_Linear_Y_Intercept": 10.0,
+        "NI_Scale[0]_Linear_Input_Source": 7,
+    }
+    multi_scaling = get_scaling(properties, {}, {})
+
+    with pytest.raises(MissingScalingDependencyError):
+        multi_scaling.scale(data)
+
+    np.testing.assert_array_equal(data.data, raw_array)

@@ -239,6 +239,44 @@ When you've opened a TDMS file with :py:meth:`~nptdms.TdmsFile.open`, you instea
 
 This will return an array of raw data, or a dictionary of scaler id to raw scaler data for DAQmx data.
 
+Scaling chain metadata
+^^^^^^^^^^^^^^^^^^^^^^
+
+A TDMS channel can have a chain of several scales, where each scale reads its input
+from the channel's raw data or from another scale. The
+:py:attr:`~nptdms.TdmsChannel.scaling_chain` property of a channel returns a
+:py:class:`~nptdms.scaling.ScalingChainInfo` object that records the actual scaling
+chain without applying it, or ``None`` when the channel has no scaling::
+
+    chain = channel.scaling_chain
+    print(chain.chain_path())
+    # e.g. "raw -> 0(Linear) -> 1(Polynomial)"
+
+Each scale is described by a :py:class:`~nptdms.scaling.ScaleInfo` containing:
+
+* the scale index and type,
+* the input source references, with ``0xFFFFFFFF`` meaning the raw channel data,
+* the input and output engineering units, when recorded,
+* the parameters used to construct the scale,
+* the parameter version, if recorded,
+* whether the scaling properties came from the channel, its group or the file.
+
+The chain-level parameter version is taken from the ``NI_Parameter_Version`` or
+``NI_Scaling_Parameter_Version`` property, and the channel unit is read from the
+``unit_string`` property. ``ScalingChainInfo`` also has ``missing_dependencies``,
+``cycles`` and ``is_valid`` methods for validating the references between scales.
+
+When a scale references another scale that is not defined, or the references form a
+cycle, the chain metadata can still be inspected and the raw data can still be read
+as shown above. Attempting to read scaled data then raises a
+:py:class:`~nptdms.scaling.MissingScalingDependencyError` or
+:py:class:`~nptdms.scaling.CircularScalingReferenceError`; the latter includes the
+cycle path.
+
+If a file was written with scaling already applied (``NI_Scaling_Status`` is
+``"scaled"``), npTDMS never applies the scales again. The chain is still recorded
+with ``already_scaled`` set to ``True`` so the parameters can be audited.
+
 Conversion to other formats
 ---------------------------
 

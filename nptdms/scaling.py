@@ -1,5 +1,9 @@
 # coding: utf-8
 
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
 import numpy as np
 import numpy.polynomial.polynomial as poly
 import re
@@ -14,10 +18,200 @@ RAW_DATA_INPUT_SOURCE = 0xFFFFFFFF
 VOLTAGE_EXCITATION = 10322
 CURRENT_EXCITATION = 10134
 
+#: Property that records the engineering units of a TDMS channel
+UNIT_STRING_PROPERTY = "unit_string"
+
+#: Properties that record the version of the parameters used by a scaling chain
+PARAMETER_VERSION_PROPERTIES = (
+    "NI_Parameter_Version",
+    "NI_Scaling_Parameter_Version",
+)
+
+
+class ScalingError(Exception):
+    """Base class for errors relating to TDMS scaling chains"""
+
+
+class MissingScalingDependencyError(ScalingError):
+    """Raised when a scale references another scale that is not defined.
+
+    The raw, unscaled channel data can still be read when this error is
+    raised while applying scaling.
+    """
+
+
+class CircularScalingReferenceError(ScalingError):
+    """Raised when the input source references between scales form a cycle.
+
+    The error message includes the cycle path. The raw, unscaled channel
+    data can still be read.
+    """
+
+
+@dataclass
+class ScaleInfo:
+    """Metadata describing a single scale within a scaling chain.
+
+    :ivar index: Index of the scale in the ``NI_Scale`` list.
+    :ivar scale_type: Name of the scale type, for example ``"Linear"``,
+        or ``"DaqMxScaler"`` for a scale backed by DAQmx raw scaler data.
+    :ivar input_sources: Indices of the scales providing input data.
+        A value of :data:`RAW_DATA_INPUT_SOURCE` means the channel's raw
+        data is used directly. DAQmx scaler scales have no input sources.
+    :ivar input_unit: Engineering units of the scale input, if recorded.
+    :ivar output_unit: Engineering units of the scale output, if recorded.
+    :ivar parameters: Parameters used to construct the scale, keyed by the
+        property suffix, excluding structural properties such as the scale
+        type, input sources, units and parameter version.
+    :ivar parameter_version: Version identifier for the scale parameters,
+        or None if no version was recorded.
+    :ivar property_scope: Where the scaling properties came from, one of
+        ``"channel"``, ``"group"`` or ``"file"``.
+    """
+
+    index: int
+    scale_type: str
+    input_sources: tuple
+    input_unit: Optional[str] = None
+    output_unit: Optional[str] = None
+    parameters: dict = field(default_factory=dict)
+    parameter_version: Optional[Any] = None
+    property_scope: Optional[str] = None
+
+
+@dataclass
+class ScalingChainInfo:
+    """Metadata describing the full scaling chain of a channel.
+
+    :ivar status: Raw value of the ``NI_Scaling_Status`` property,
+        defaulting to ``"unscaled"``.
+    :ivar already_scaled: True when the data was written with scaling
+        already applied, so no scales are applied when reading.
+    :ivar scales: :class:`ScaleInfo` for each scale index. References to
+        indices outside this list, or None entries, are reported by
+        :meth:`missing_dependencies`.
+    :ivar final_scale_index: Index of the scale that produces the final
+        channel data.
+    :ivar property_scope: Where the scaling properties came from, one of
+        ``"channel"``, ``"group"`` or ``"file"``.
+    :ivar parameter_version: Version identifier for the scaling chain
+        parameters, or None if no version was recorded.
+    :ivar channel_unit: Engineering units recorded against the channel
+        itself in the ``unit_string`` property, if present.
+    """
+
+    status: str
+    scales: list
+    final_scale_index: int
+    property_scope: str
+    already_scaled: bool = False
+    parameter_version: Optional[Any] = None
+    channel_unit: Optional[str] = None
+
+    @property
+    def output_unit(self):
+        """Engineering units of the final scale, if recorded"""
+        final_scale = self._final_scale()
+        if final_scale is not None and final_scale.output_unit is not None:
+            return final_scale.output_unit
+        return self.channel_unit
+
+    def missing_dependencies(self):
+        """Return ``(scale_index, missing_source)`` pairs for broken references"""
+        missing = []
+        for scale_info in self.scales:
+            if scale_info is None:
+                continue
+            for source in scale_info.input_sources:
+                if source == RAW_DATA_INPUT_SOURCE:
+                    continue
+                if source < 0 or source >= len(self.scales) or self.scales[source] is None:
+                    missing.append((scale_info.index, source))
+        return missing
+
+    def cycles(self):
+        """Return a list of cycles, each as a list of scale indices.
+
+        The first and last index of each cycle are the same.
+        """
+        found_cycles = []
+        path = []
+        visited = set()
+
+        def visit(index):
+            if index == RAW_DATA_INPUT_SOURCE or index in visited:
+                return
+            if index in path:
+                cycle_start = path.index(index)
+                found_cycles.append(path[cycle_start:] + [index])
+                return
+            if index < 0 or index >= len(self.scales) or self.scales[index] is None:
+                return
+            path.append(index)
+            for source in self.scales[index].input_sources:
+                visit(source)
+            path.remove(index)
+            visited.add(index)
+
+        visit(self.final_scale_index)
+        return found_cycles
+
+    def is_valid(self):
+        """Return True if the chain has no missing dependencies or cycles"""
+        return not self.missing_dependencies() and not self.cycles()
+
+    def ordered_scale_indices(self):
+        """Return reachable scale indices in dependency order"""
+        ordered = []
+        visited = set()
+
+        def visit(index):
+            if (index == RAW_DATA_INPUT_SOURCE or index in visited or
+                    index < 0 or index >= len(self.scales) or
+                    self.scales[index] is None):
+                return
+            visited.add(index)
+            for source in self.scales[index].input_sources:
+                visit(source)
+            ordered.append(index)
+
+        visit(self.final_scale_index)
+        return ordered
+
+    def chain_path(self):
+        """Return a human readable description of the scaling chain.
+
+        For example ``"raw -> 0(Linear) -> 1(Polynomial)"``. Scales with
+        multiple inputs show their inputs joined by commas.
+        """
+        rendered = set()
+
+        def render(index):
+            if index == RAW_DATA_INPUT_SOURCE:
+                return "raw"
+            if index < 0 or index >= len(self.scales) or self.scales[index] is None:
+                return "missing scale %d" % index
+            scale_info = self.scales[index]
+            label = "%d(%s)" % (index, scale_info.scale_type)
+            if index in rendered or not scale_info.input_sources:
+                return label
+            rendered.add(index)
+            inputs = ", ".join(render(source) for source in scale_info.input_sources)
+            return "%s -> %s" % (inputs, label)
+
+        return render(self.final_scale_index)
+
+    def _final_scale(self):
+        if 0 <= self.final_scale_index < len(self.scales):
+            return self.scales[self.final_scale_index]
+        return None
+
 
 class NoOpScaling(object):
     """ Does not apply any scaling
     """
+    scale_type = "AdvancedAPI"
+
     def __init__(self, input_source):
         self.input_source = input_source
 
@@ -37,6 +231,8 @@ class NoOpScaling(object):
 class LinearScaling(object):
     """ Linear scaling with slope and intercept
     """
+    scale_type = "Linear"
+
     def __init__(self, intercept, slope, input_source):
         self.intercept = intercept
         self.slope = slope
@@ -61,6 +257,8 @@ class LinearScaling(object):
 class PolynomialScaling(object):
     """ Polynomial scaling with an arbitrary number of coefficients
     """
+    scale_type = "Polynomial"
+
     def __init__(self, coefficients, input_source):
         self.coefficients = coefficients
         self.input_source = input_source
@@ -96,6 +294,8 @@ class RtdScaling(object):
     """ Converts a signal from a resistance temperature detector into
         degrees Celsius using the Callendar-Van Dusen equation
     """
+    scale_type = "RTD"
+
     def __init__(
             self, current_excitation, r0_nominal_resistance,
             a, b, c,
@@ -167,6 +367,8 @@ class RtdScaling(object):
 class StrainScaling(object):
     """ Converts a voltage measurement from a strain gauge bridge to strain
     """
+    scale_type = "Strain"
+
     def __init__(
             self, configuration, poisson_ratio, gage_resistance, lead_wire_resistance, initial_bridge_voltage,
             gage_factor, gain_adjustment, voltage_excitation, input_source):
@@ -300,6 +502,8 @@ class TableScaling(object):
     """ Scales data using a map from input to output values with
         linear interpolation for points in between inputs.
     """
+    scale_type = "Table"
+
     def __init__(
             self, pre_scaled_values, scaled_values, input_source):
 
@@ -349,6 +553,8 @@ class TableScaling(object):
 class ThermistorScaling(object):
     """ Converts a voltage measurement from a Thermistor into temperature in Kelvin
     """
+    scale_type = "Thermistor"
+
     def __init__(
             self,
             excitation_type,
@@ -415,6 +621,8 @@ class ThermocoupleScaling(object):
         Can convert in either direction depending on the scaling direction
         parameter.
     """
+    scale_type = "Thermocouple"
+
     def __init__(self, type_code, scaling_direction, input_source):
         # Thermocouple types from
         # http://zone.ni.com/reference/en-XX/help/371361R-01/glang/tdms_create_scalinginfo/#instance2
@@ -458,6 +666,8 @@ class ThermocoupleScaling(object):
 class AddScaling(object):
     """ Adds two scalings
     """
+    scale_type = "Add"
+
     def __init__(self, left_input_source, right_input_source):
         self.left_input_source = left_input_source
         self.right_input_source = right_input_source
@@ -477,6 +687,8 @@ class AddScaling(object):
 class SubtractScaling(object):
     """ Subtracts one scaling from another
     """
+    scale_type = "Subtract"
+
     def __init__(self, left_input_source, right_input_source):
         self.left_input_source = left_input_source
         self.right_input_source = right_input_source
@@ -501,6 +713,8 @@ class SubtractScaling(object):
 class DaqMxScalerScaling(object):
     """ Reads scaler from DAQmx data
     """
+    scale_type = "DaqMxScaler"
+
     def __init__(self, scale_id):
         self.scale_id = scale_id
 
@@ -511,18 +725,79 @@ class DaqMxScalerScaling(object):
 class MultiScaling(object):
     """ Computes scaled data from multiple scalings
     """
-    def __init__(self, scalings):
+    def __init__(self, scalings, chain_info=None):
         self.scalings = scalings
+        self.chain_info = chain_info
+
+    @property
+    def final_scale_index(self):
+        return len(self.scalings) - 1
 
     def scale(self, raw_channel_data):
-        final_scale = len(self.scalings) - 1
-        return self._compute_scaled_data(final_scale, raw_channel_data)
+        self._validate_chain()
+        return self._compute_scaled_data(self.final_scale_index, raw_channel_data)
 
     def get_dtype(self, raw_data_type, scaler_data_types):
         """ Get the numpy dtype for scaled data
         """
-        final_scale = len(self.scalings) - 1
-        return self._compute_scale_dtype(final_scale, raw_data_type, scaler_data_types)
+        self._validate_chain()
+        return self._compute_scale_dtype(
+            self.final_scale_index, raw_data_type, scaler_data_types)
+
+    def _validate_chain(self):
+        """ Check that all input source references resolve and there are no
+            cycles, raising a descriptive error otherwise.
+        """
+        path = []
+
+        def visit(scale_index):
+            if scale_index == RAW_DATA_INPUT_SOURCE:
+                return
+            if scale_index in path:
+                cycle = path[path.index(scale_index):] + [scale_index]
+                raise CircularScalingReferenceError(
+                    "Circular scaling reference detected: %s" %
+                    self._format_scale_path(cycle))
+            if (scale_index < 0 or scale_index >= len(self.scalings) or
+                    self.scalings[scale_index] is None):
+                raise MissingScalingDependencyError(
+                    "Scale %s references a missing scale %d. Scaling chain: %s" %
+                    (path[-1] if path else self.final_scale_index,
+                     scale_index, self._describe_chain()))
+            path.append(scale_index)
+            for source in self._input_sources(self.scalings[scale_index]):
+                visit(source)
+            path.pop()
+
+        visit(self.final_scale_index)
+
+    def _describe_chain(self):
+        if self.chain_info is not None:
+            return self.chain_info.chain_path()
+        return self._format_scale_path(
+            [self.final_scale_index])
+
+    def _format_scale_path(self, indices):
+        return " -> ".join(
+            "raw" if index == RAW_DATA_INPUT_SOURCE else
+            self._scale_label(index) for index in indices)
+
+    def _scale_label(self, scale_index):
+        if (scale_index < 0 or scale_index >= len(self.scalings) or
+                self.scalings[scale_index] is None):
+            return "missing scale %d" % scale_index
+        scaling = self.scalings[scale_index]
+        return "%d(%s)" % (scale_index, getattr(scaling, "scale_type", type(scaling).__name__))
+
+    @staticmethod
+    def _input_sources(scaling):
+        if isinstance(scaling, DaqMxScalerScaling):
+            return ()
+        if hasattr(scaling, 'input_source'):
+            return (scaling.input_source,)
+        if hasattr(scaling, 'left_input_source') and hasattr(scaling, 'right_input_source'):
+            return (scaling.left_input_source, scaling.right_input_source)
+        return ()
 
     def _compute_scale_dtype(self, scale_index, raw_data_type, scaler_data_types):
         if scale_index == RAW_DATA_INPUT_SOURCE:
@@ -551,8 +826,9 @@ class MultiScaling(object):
 
         scaling = self.scalings[scale_index]
         if scaling is None:
-            raise Exception(
-                "Cannot compute data for scale %d" % scale_index)
+            raise MissingScalingDependencyError(
+                "Cannot compute data for missing scale %d. Scaling chain: %s" %
+                (scale_index, self._describe_chain()))
 
         if isinstance(scaling, DaqMxScalerScaling):
             return scaling.scale_daqmx(raw_channel_data.scaler_data)
@@ -575,23 +851,61 @@ def get_scaling(channel_properties, group_properties, file_properties):
     """ Get scaling for a channel from either the channel itself,
         its group, or the whole TDMS file
     """
-    scalings = (
-        _get_channel_scaling(p)
-        for p in [channel_properties, group_properties, file_properties])
-    try:
-        return next(s for s in scalings if s is not None)
-    except StopIteration:
-        return None
+    multi_scaling, _ = _build_scalings(
+        channel_properties, group_properties, file_properties)
+    return multi_scaling
 
 
-def _get_channel_scaling(properties):
+def get_scaling_chain_info(channel_properties, group_properties, file_properties):
+    """ Get metadata describing the scaling chain of a channel.
+
+    Returns a :class:`ScalingChainInfo` if the channel (or its group or
+    file properties) defines any scales, otherwise None. The chain info is
+    returned even when the data was already written in scaled form, in which
+    case :attr:`ScalingChainInfo.already_scaled` is True and no scales are
+    applied when reading data.
+    """
+    multi_scaling, fallback_info = _build_scalings(
+        channel_properties, group_properties, file_properties)
+    if multi_scaling is not None:
+        return multi_scaling.chain_info
+    return fallback_info
+
+
+def _build_scalings(channel_properties, group_properties, file_properties):
+    """ Build scaling objects and chain info from channel, group and file
+        properties, returning ``(multi_scaling, fallback_chain_info)``.
+    """
+    fallback_info = None
+    for scope, properties in (
+            ("channel", channel_properties),
+            ("group", group_properties),
+            ("file", file_properties)):
+        multi_scaling, chain_info = _build_channel_scaling(properties, scope)
+        if chain_info is not None and fallback_info is None:
+            fallback_info = chain_info
+        if multi_scaling is not None:
+            if chain_info is not None:
+                chain_info.channel_unit = channel_properties.get(UNIT_STRING_PROPERTY)
+            return multi_scaling, fallback_info
+    if fallback_info is not None:
+        fallback_info.channel_unit = channel_properties.get(UNIT_STRING_PROPERTY)
+    return None, fallback_info
+
+
+def _build_channel_scaling(properties, scope):
     num_scalings = _get_number_of_scalings(properties)
     if num_scalings is None or num_scalings == 0:
-        return None
+        return None, None
+
     scaling_status = properties.get("NI_Scaling_Status", "unscaled")
+    chain_info = _build_chain_info(
+        properties, num_scalings, scope, scaling_status)
+
     if scaling_status == "scaled":
-        # Data is written with scaling already applied
-        return None
+        # Data is written with scaling already applied, so don't build
+        # scaling objects and never apply scales again.
+        return None, chain_info
 
     scalings = [None] * num_scalings
     for scale_index in range(num_scalings):
@@ -634,11 +948,95 @@ def _get_channel_scaling(properties):
                 properties, scale_index, 'AdvancedAPI')
         else:
             log.warning("Unsupported scale type: %s", scale_type)
-            return None
+            return None, chain_info
 
     if not scalings:
-        return None
-    return MultiScaling(scalings)
+        return None, chain_info
+    return MultiScaling(scalings, chain_info), chain_info
+
+
+def _build_chain_info(properties, num_scalings, scope, scaling_status):
+    """ Build chain metadata without constructing any scaling objects, so
+        metadata inspection never fails on a malformed scaling chain.
+    """
+    parameter_version = _get_parameter_version(properties)
+    scale_infos = []
+    for scale_index in range(num_scalings):
+        type_property = 'NI_Scale[%d]_Scale_Type' % scale_index
+        scale_type = properties.get(type_property, "DaqMxScaler")
+        scale_infos.append(
+            _build_scale_info(properties, scale_index, scale_type, scope))
+
+    return ScalingChainInfo(
+        status=scaling_status,
+        scales=scale_infos,
+        final_scale_index=num_scalings - 1,
+        property_scope=scope,
+        already_scaled=(scaling_status == "scaled"),
+        parameter_version=parameter_version)
+
+
+def _build_scale_info(properties, scale_index, scale_type, scope):
+    prefix = "NI_Scale[%d]_" % scale_index
+    parameters = OrderedDict()
+    input_unit = None
+    output_unit = None
+    parameter_version = None
+    input_sources = []
+
+    for key, value in properties.items():
+        if not key.startswith(prefix):
+            continue
+        suffix = key[len(prefix):]
+        if suffix == "Scale_Type":
+            continue
+        if suffix.endswith("_Input_Unit"):
+            input_unit = value
+            continue
+        if suffix.endswith("_Output_Unit"):
+            output_unit = value
+            continue
+        if suffix.endswith("_Parameter_Version"):
+            parameter_version = value
+            continue
+        if suffix.endswith("_Left_Operand_Input_Source"):
+            input_sources.append(("left", value))
+            continue
+        if suffix.endswith("_Right_Operand_Input_Source"):
+            input_sources.append(("right", value))
+            continue
+        if suffix.endswith("_Input_Source"):
+            input_sources.append(("input", value))
+            continue
+        parameters[suffix] = value
+
+    ordered_sources = []
+    for operand, source in input_sources:
+        if operand == "left":
+            ordered_sources.insert(0, source)
+        elif operand == "right":
+            ordered_sources.append(source)
+        else:
+            ordered_sources.append(source)
+    if not ordered_sources and scale_type != "DaqMxScaler":
+        ordered_sources = [RAW_DATA_INPUT_SOURCE]
+
+    return ScaleInfo(
+        index=scale_index,
+        scale_type=scale_type,
+        input_sources=tuple(ordered_sources),
+        input_unit=input_unit,
+        output_unit=output_unit,
+        parameters=parameters,
+        parameter_version=parameter_version,
+        property_scope=scope)
+
+
+def _get_parameter_version(properties):
+    for version_property in PARAMETER_VERSION_PROPERTIES:
+        if version_property in properties:
+            return properties[version_property]
+    return None
 
 
 _scale_regex = re.compile(r"NI_Scale\[(\d+)\]_Scale_Type")

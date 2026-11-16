@@ -884,6 +884,22 @@ class TdmsChannel(object):
         return scaling.get_scaling(
             self.properties, self._group_properties, self._file_properties)
 
+    @cached_property
+    def scaling_chain(self):
+        """ Metadata describing the scaling chain for this channel.
+
+        Returns a :class:`nptdms.scaling.ScalingChainInfo` recording each
+        scale in the chain, its input source references, units, parameters
+        and parameter version, or None if the channel has no scaling.
+
+        The metadata is available even when a scale references a missing
+        dependency or the references form a cycle; in that case applying the
+        scaling raises an error but the raw data can still be read with
+        :py:attr:`raw_data` or :py:meth:`read_data` with ``scaled=False``.
+        """
+        return scaling.get_scaling_chain_info(
+            self.properties, self._group_properties, self._file_properties)
+
     def _read_channel_data_chunks(self):
         for chunk in self._reader.read_raw_data_for_channel(self.path):
             _convert_channel_data_chunk(chunk, self._raw_timestamps)
