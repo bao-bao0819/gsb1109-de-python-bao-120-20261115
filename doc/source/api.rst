@@ -17,6 +17,7 @@ Contents:
    api/fasta
    api/peff
    api/mzml
+   api/precursor
    api/mzxml
    api/mzmlb
    api/mgf

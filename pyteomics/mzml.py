@@ -362,6 +362,28 @@ class MzML(aux.BinaryArrayConversionMixin, xml.CVParamParser, aux.TimeOrderedInd
     def _get_time(scan):
         return scan['scanList']['scan'][0]['scan start time']
 
+    def precursor_map(self):
+        """Build a map linking MSn (MS2, MS3, ...) spectra to their precursor scans.
+
+        Iterates over the spectra in the file and collects the declared
+        ``spectrumRef`` references, isolation windows and selected ions of
+        every ``<precursor>`` entry into a
+        :py:class:`pyteomics.precursor.PrecursorMap`.
+
+        Returns
+        -------
+        out : pyteomics.precursor.PrecursorMap
+
+        Notes
+        -----
+        Scans whose precursor entries do not declare a ``spectrumRef`` are
+        listed separately in the map and are not matched to the nearest
+        preceding scan. Cyclic or hierarchy-violating references are reported
+        as anomalies with their original declarations.
+        """
+        from . import precursor
+        return precursor.build_precursor_map(self)
+
 
 def read(source, read_schema=False, iterative=True, use_index=False, dtype=None, huge_tree=False, decode_binary=True, cv=None):
     """Parse `source` and iterate through spectra.
