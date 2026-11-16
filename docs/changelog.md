@@ -14,6 +14,12 @@ See the [Contributing Guide](contributing.md) for details.
 
 ## Unreleased
 
+### Added
+
+* `markdown.fulltext` provides a searchable view of rendered visible text with
+  a per-character map back to the Markdown source. `Markdown.extract_text`
+  exposes the same view with the configured extensions.
+
 ### Fixed
 
 * The `toc` extension no longer raises `TypeError` for a heading whose `id`

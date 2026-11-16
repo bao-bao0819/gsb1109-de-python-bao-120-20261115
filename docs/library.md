@@ -352,3 +352,89 @@ The [`convertFile`][markdown.Markdown.convertFile] method accepts the same
 arguments as the `markdown.markdownFromFile` function. There is little
 benefit in accessing this method directly and it remains for backward
 compatability puposes only.
+
+## Visible Text and Source Ranges { #fulltext }
+
+Rendered HTML is not convenient to search: inline markup splits phrases, and
+Markdown syntax characters are not part of what a reader sees. The
+[`markdown.fulltext`][markdown.fulltext] module provides a flattened view of
+the rendered text together with a per-character map back to the original
+source.
+
+``` python
+from markdown import fulltext
+
+visible = fulltext.extract('A [link](https://example.com) and *emphasis*.')
+visible.text
+# 'A link and emphasis.'
+
+match = visible.find('and emphasis')
+match.source_range
+# SourceRange(start=30, end=43)
+```
+
+The same view is available from a `Markdown` instance, so extensions and
+configuration are honored:
+
+``` python
+md = markdown.Markdown(extensions=['tables'])
+visible = md.extract_text('| a |\n| - |\n| b |')
+```
+
+### Visibility Rules
+
+The visible text follows the rendered result, not the source spelling.
+
+* **Links.** Only the label is visible. The destination and title are not, and
+  neither are link reference definitions.
+* **Images.** The alternative text is visible, including its Markdown source
+  when the image was written with Markdown syntax. The source and title are
+  not visible.
+* **Code.** Code spans and code blocks contribute their literal content.
+  Markdown is not parsed inside them, and their whitespace is retained.
+* **Raw HTML.** The text of rendered elements is visible. Comments,
+  processing instructions, declarations, and the content of `script`,
+  `style`, `textarea`, `template`, `head`, and `title` are not. An `alt`
+  attribute on an image is visible.
+* **Character references.** `&amp;`, `&#65;`, and named references are
+  replaced by the character they denote.
+* **Markdown markers.** Emphasis and strong delimiters, brackets, fences,
+  blockquote markers, list bullets, and table pipes are not visible.
+
+Removing emphasis markers rather than replacing them with characters keeps the
+text on either side adjacent. A search for `important note` therefore succeeds
+in `an *important* note`.
+
+### Source Mapping
+
+Each visible character has a [`Span`][markdown.fulltext.Span], which is a
+sequence of [`SourceRange`][markdown.fulltext.SourceRange] values.
+
+* An ordinary character has one range pointing at the source character.
+* A character expanded from a character reference points at the whole
+  reference, so removing the surrounding text also removes the reference.
+* A separator inserted between blocks or table cells has no range. It is
+  synthetic, and changing it does not correspond to a source edit.
+
+[`TextMatch.source_range`][markdown.fulltext.TextMatch.source_range] returns the
+smallest source range enclosing every owned character of a match. When a match
+contains a synthetic separator, the envelope spans the gap between the source
+characters; `TextMatch.synthetic` reports that condition. Inspect
+`TextMatch.source_ranges` when each original range is needed separately.
+
+### Searching
+
+``` python
+from markdown import fulltext
+
+for match in fulltext.search(source, 'release notes', regex=False):
+    print(match.text, match.source_range)
+
+for match in fulltext.search(source, r'v\d+\.\d+', regex=True):
+    print(match.text, match.source_ranges)
+```
+
+[`extract`][markdown.fulltext.extract] returns an
+[`IndexedText`][markdown.fulltext.IndexedText]. It supports `find`, `rfind`,
+`finditer`, regular-expression `search`, and slicing; a slice retains the
+source map. [`plain_text`][markdown.fulltext.plain_text] returns only the text.

@@ -36,6 +36,7 @@ from .util import BLOCK_LEVEL_ELEMENTS
 
 if TYPE_CHECKING:  # pragma: no cover
     from xml.etree.ElementTree import Element
+    from .fulltext import IndexedText
 
 __all__ = ['Markdown', 'markdown', 'markdownFromFile']
 
@@ -397,6 +398,20 @@ class Markdown:
             output = pp.run(output)
 
         return output.strip()
+
+    def extract_text(self, source: str) -> IndexedText:
+        """
+        Return a source-mapped view of the visible text rendered from `source`.
+
+        The result is an [`IndexedText`][markdown.fulltext.IndexedText] whose
+        characters can be located in the original source.  See
+        [`markdown.fulltext`][] for the visibility rules.
+
+        Arguments:
+            source: Markdown formatted text as Unicode or ASCII string.
+        """
+        from .fulltext import extract
+        return extract(source, self)
 
     def convertFile(
         self,
