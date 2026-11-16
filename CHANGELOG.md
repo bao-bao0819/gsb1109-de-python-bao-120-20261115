@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 ## Unreleased
 
 - Preserve explicit empty-string arguments in message helpers and TCP clients while keeping omitted values argument-free.
+- Add incremental offline readers for SLIP (OSC 1.1) and length-prefixed (OSC 1.0) byte streams, with cross-chunk length headers and escapes, per-packet output, bounded bad-length rejection, and unconfirmed tails.
 
 ## [1.10.2]
 

@@ -1,10 +1,21 @@
-from pytest import fixture, mark, raises
+from pytest import FixtureRequest, fixture, mark, raises
 
 from pythonosc.parsing.framing import (
+    BINARY_LENGTH_FRAMING,
+    SLIP_FRAMING,
     BinaryLengthFraming,
+    BinaryLengthReader,
+    FrameSizeError,
     Framing,
     FramingParser,
+    FramingReader,
     SLIPFraming,
+    SLIPReader,
+    get_framing_for_mode,
+    iter_frames,
+    make_reader,
+    read_datagrams,
+    read_frames,
 )
 
 
@@ -156,3 +167,176 @@ class TestFramingParser:
         parser.reset()
 
         assert parser.remaining == b""
+
+
+class TestReaders:
+    @fixture(params=[SLIP_FRAMING, BINARY_LENGTH_FRAMING], ids=["1.1", "1.0"])
+    def framing(self, request: FixtureRequest) -> Framing:
+        return request.param
+
+    def test_bytewise_chunks(self, framing: Framing) -> None:
+        expected = [b"one", b"two\xc0\xdb", b"three"]
+        data = b"".join(framing.encode(value) for value in expected)
+        reader = framing.reader()
+
+        actual = []
+        for byte in data:
+            actual.extend(reader.feed(bytes([byte])))
+
+        assert actual == expected
+        assert reader.remaining == b""
+
+    @mark.parametrize("split", [1, 2, 3, 4])
+    def test_header_and_escape_split(self, framing: Framing, split: int) -> None:
+        expected = [b"te\xc0\xdbst", b"tail"]
+        data = b"".join(framing.encode(value) for value in expected)
+        reader = framing.reader()
+
+        assert reader.feed(data[:split]) == []
+        assert reader.feed(data[split:]) == expected
+        assert reader.remaining == b""
+
+    def test_incomplete_tail_is_unconsumed(self, framing: Framing) -> None:
+        complete = framing.encode(b"first")
+        partial = framing.encode(b"second")
+        data = complete + partial[:-1]
+        reader = framing.reader()
+
+        assert reader.feed(data) == [b"first"]
+        assert reader.remaining == data[len(complete) :]
+
+    def test_read_returns_only_complete_datagrams(self, framing: Framing) -> None:
+        complete = framing.encode(b"first")
+        data = complete + framing.encode(b"second")[:-1]
+
+        assert framing.read(data) == [b"first"]
+
+    def test_iter_frames_accepts_chunk_iterables(self, framing: Framing) -> None:
+        expected = [b"one", b"two"]
+        data = b"".join(framing.encode(value) for value in expected)
+        chunks = [data[:1], data[1:3], data[3:]]
+
+        assert list(framing.iter_frames(chunks)) == expected
+
+    def test_oversized_frame_keeps_confirmed_packets(self, framing: Framing) -> None:
+        reader = framing.reader(max_frame_size=8)
+        confirmed = framing.encode(b"ok")
+        oversized = framing.encode(b"x" * 9)
+
+        with raises(FrameSizeError) as exc_info:
+            reader.feed(confirmed + oversized)
+
+        assert exc_info.value.complete == [b"ok"]
+        assert reader.remaining == oversized
+
+
+class TestBinaryLengthReader:
+    def test_header_split_across_chunks(self) -> None:
+        reader = BinaryLengthReader()
+        data = b"\x00\x00\x00\x04test\x00\x00\x00\x04next"
+
+        assert reader.feed(data[:2]) == []
+        assert reader.feed(data[2:5]) == []
+        assert reader.feed(data[5:]) == [b"test", b"next"]
+        assert reader.remaining == b""
+
+    def test_zero_length_frame_is_consumed_without_message(self) -> None:
+        reader = BinaryLengthReader()
+
+        assert reader.feed(b"\x00\x00\x00\x00") == []
+        assert reader.remaining == b""
+        assert reader.feed(b"\x00\x00\x00\x02ok") == [b"ok"]
+        assert reader.remaining == b""
+
+    def test_oversized_length_rejected_before_payload(self) -> None:
+        reader = BinaryLengthReader(max_frame_size=8)
+
+        with raises(FrameSizeError, match="too large: 9 > 8"):
+            reader.feed(b"\x00\x00\x00\x09")
+        assert reader.remaining == b"\x00\x00\x00\x09"
+
+    def test_oversized_length_after_complete_frame(self) -> None:
+        reader = BinaryLengthReader(max_frame_size=8)
+        data = b"\x00\x00\x00\x02ok\xff\xff\xff\xff"
+
+        with raises(FrameSizeError) as exc_info:
+            reader.feed(data)
+        assert exc_info.value.complete == [b"ok"]
+        assert reader.remaining == b"\xff\xff\xff\xff"
+
+    def test_oversized_length_with_partial_payload_is_unconsumed(self) -> None:
+        reader = BinaryLengthReader(max_frame_size=8)
+
+        with raises(FrameSizeError):
+            reader.feed(b"\x00\x00\x00\x09abc")
+        assert reader.remaining == b"\x00\x00\x00\x09abc"
+
+    def test_max_buffer_size_caps_declared_length(self) -> None:
+        reader = BinaryLengthReader(max_buffer_size=16)
+
+        with raises(FrameSizeError):
+            reader.feed(b"\x00\x00\x00\x11")
+
+
+class TestModeReaders:
+    @mark.parametrize(
+        ["mode", "data"],
+        [
+            ("1.0", b"\x00\x00\x00\x03one\x00\x00\x00\x03two"),
+            ("1.1", b"\xc0one\xc0\xc0two\xc0"),
+        ],
+    )
+    def test_make_reader(self, mode: str, data: bytes) -> None:
+        reader = make_reader(mode)
+
+        assert reader.feed(data) == [b"one", b"two"]
+        assert reader.remaining == b""
+        assert get_framing_for_mode(mode) is (
+            BINARY_LENGTH_FRAMING if mode == "1.0" else SLIP_FRAMING
+        )
+        assert read_datagrams(data, mode) == [b"one", b"two"]
+
+    def test_unknown_mode(self) -> None:
+        with raises(ValueError, match="Unsupported OSC mode: 2.0"):
+            get_framing_for_mode("2.0")
+
+
+class TestOfflineSources:
+    def test_read_frames_from_bytes(self) -> None:
+        data = b"".join(
+            BINARY_LENGTH_FRAMING.encode(value) for value in (b"one", b"two")
+        )
+
+        assert read_frames(data[:4], BINARY_LENGTH_FRAMING) == []
+        assert read_frames(data, BINARY_LENGTH_FRAMING) == [b"one", b"two"]
+        with raises(FrameSizeError):
+            read_frames(data, BINARY_LENGTH_FRAMING, max_frame_size=2)
+
+    def test_read_frames_from_file_like(self) -> None:
+        from io import BytesIO
+
+        data = b"".join(SLIP_FRAMING.encode(value) for value in (b"a", b"b"))
+
+        assert read_frames(BytesIO(data), SLIP_FRAMING) == [b"a", b"b"]
+
+    def test_large_offline_stream_respects_small_buffer(self) -> None:
+        from io import BytesIO
+
+        expected = [b"x" * 10] * 200
+        data = b"".join(BINARY_LENGTH_FRAMING.encode(value) for value in expected)
+
+        reader = BinaryLengthReader(max_buffer_size=32)
+        assert reader.read(BytesIO(data)) == expected
+        assert reader.remaining == b""
+
+    def test_iter_frames_helper(self) -> None:
+        data = b"".join(BINARY_LENGTH_FRAMING.encode(value) for value in (b"a", b"b"))
+
+        assert list(iter_frames(data, BINARY_LENGTH_FRAMING)) == [b"a", b"b"]
+
+    def test_concrete_reader_classes(self) -> None:
+        assert SLIPReader().feed(b"\xc0x\xc0") == [b"x"]
+        assert BinaryLengthReader().feed(b"\x00\x00\x00\x01x") == [b"x"]
+        assert isinstance(SLIPReader(), FramingReader)
+        assert isinstance(BinaryLengthReader(), FramingReader)
+        assert SLIPReader().framing is not None
