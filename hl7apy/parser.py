@@ -35,7 +35,13 @@ from hl7apy.validation import Validator
 
 
 def parse_message(
-    message, validation_level=None, find_groups=True, message_profile=None, report_file=None, force_validation=False
+    message,
+    validation_level=None,
+    find_groups=True,
+    message_profile=None,
+    report_file=None,
+    force_validation=False,
+    extension_context=None,
 ):
     r"""
     Parse the given ER7-encoded message and return an instance of :class:`Message <hl7apy.core.Message>`.
@@ -55,6 +61,11 @@ def parse_message(
         
     :type force_validation: ``bool``
     :type force_validation: if ``True``, automatically forces the message validation after the end of the parsing
+
+    :type extension_context: :class:`hl7apy.extensions.ExtensionContext`
+    :param extension_context: the institution/configuration context used to resolve
+        Z-segment extension definitions. When ``None``, Z-segments keep the default
+        generic structure.
 
     :return: an instance of :class:`Message <hl7apy.core.Message>`
 
@@ -84,14 +95,35 @@ def parse_message(
             version=version,
             validation_level=validation_level,
             encoding_chars=encoding_chars,
+            extension_context=extension_context,
         )
     except InvalidName:
-        m = Message(version=version, validation_level=validation_level, encoding_chars=encoding_chars)
+        m = Message(
+            version=version,
+            validation_level=validation_level,
+            encoding_chars=encoding_chars,
+            extension_context=extension_context,
+        )
 
     try:
-        children = parse_segments(message, m.version, encoding_chars, validation_level, m.reference, find_groups)
+        children = parse_segments(
+            message,
+            m.version,
+            encoding_chars,
+            validation_level,
+            m.reference,
+            find_groups,
+            extension_context=extension_context,
+        )
     except AttributeError:  # m.reference can raise i
-        children = parse_segments(message, m.version, encoding_chars, validation_level, find_groups=False)
+        children = parse_segments(
+            message,
+            m.version,
+            encoding_chars,
+            validation_level,
+            find_groups=False,
+            extension_context=extension_context,
+        )
 
     m.children = children
 
@@ -104,7 +136,15 @@ def parse_message(
     return m
 
 
-def parse_segments(text, version=None, encoding_chars=None, validation_level=None, references=None, find_groups=False):
+def parse_segments(
+    text,
+    version=None,
+    encoding_chars=None,
+    validation_level=None,
+    references=None,
+    find_groups=False,
+    extension_context=None,
+):
     """
     Parse the given ER7-encoded segments and return a list of :class:`hl7apy.core.Segment` instances.
 
@@ -153,7 +193,13 @@ def parse_segments(text, version=None, encoding_chars=None, validation_level=Non
             segment_name = s[:3]
             for x in range(len(parents_refs)):
                 if not find_groups:
-                    segment = parse_segment(s.strip(), version, encoding_chars, validation_level)
+                    segment = parse_segment(
+                        s.strip(),
+                        version,
+                        encoding_chars,
+                        validation_level,
+                        extension_context=extension_context,
+                    )
                     segments.append(segment)
                 else:
                     ref, parents_refs = _get_segment_reference(segment_name, parents_refs)
@@ -176,7 +222,11 @@ def parse_segments(text, version=None, encoding_chars=None, validation_level=Non
                                 cur_idx = parents_refs.index((None, references))
                             for p_ref in parents_refs[cur_idx + 1 :]:
                                 group = Group(
-                                    p_ref[0], version=version, reference=p_ref[1], validation_level=validation_level
+                                    p_ref[0],
+                                    version=version,
+                                    reference=p_ref[1],
+                                    validation_level=validation_level,
+                                    extension_context=extension_context,
                                 )
                                 if current_parent is None:
                                     segments.append(group)
@@ -194,6 +244,7 @@ def parse_segments(text, version=None, encoding_chars=None, validation_level=Non
                                 version=version,
                                 reference=current_parent.reference,
                                 validation_level=validation_level,
+                                extension_context=extension_context,
                             )
 
                             if current_parent.parent is None:
@@ -202,7 +253,14 @@ def parse_segments(text, version=None, encoding_chars=None, validation_level=Non
                                 current_parent.parent.add(group)
                             current_parent = group
 
-                        segment = parse_segment(s.strip(), version, encoding_chars, validation_level, ref)
+                        segment = parse_segment(
+                            s.strip(),
+                            version,
+                            encoding_chars,
+                            validation_level,
+                            ref,
+                            extension_context=extension_context,
+                        )
                         if current_parent is None:
                             segments.append(segment)
                         else:
@@ -211,7 +269,9 @@ def parse_segments(text, version=None, encoding_chars=None, validation_level=Non
     return segments
 
 
-def parse_segment(text, version=None, encoding_chars=None, validation_level=None, reference=None):
+def parse_segment(
+    text, version=None, encoding_chars=None, validation_level=None, reference=None, extension_context=None
+):
     """
     Parse the given ER7-encoded segment and return an instance of :class:`Segment <hl7apy.core.Segment>`.
 
@@ -251,7 +311,13 @@ def parse_segment(text, version=None, encoding_chars=None, validation_level=None
 
     segment_name = text[:3]
     text = text[4:] if segment_name != 'MSH' else text[3:]
-    segment = Segment(segment_name, version=version, validation_level=validation_level, reference=reference)
+    segment = Segment(
+        segment_name,
+        version=version,
+        validation_level=validation_level,
+        reference=reference,
+        extension_context=extension_context,
+    )
     segment.children = parse_fields(
         text,
         segment_name,
@@ -260,6 +326,7 @@ def parse_segment(text, version=None, encoding_chars=None, validation_level=None
         validation_level,
         segment.structure_by_name,
         segment.allow_infinite_children,
+        extension_context=extension_context,
     )
     return segment
 
@@ -272,6 +339,7 @@ def parse_fields(
     validation_level=None,
     references=None,
     force_varies=False,
+    extension_context=None,
 ):
     """
     Parse the given ER7-encoded fields and return a list of :class:`hl7apy.core.Field`.
@@ -336,19 +404,55 @@ def parse_fields(
 
         if field.strip() or name is None:
             if name == 'MSH_2':
-                fields.append(parse_field(field, name, version, encoding_chars, validation_level, reference))
+                fields.append(
+                    parse_field(
+                        field,
+                        name,
+                        version,
+                        encoding_chars,
+                        validation_level,
+                        reference,
+                        extension_context=extension_context,
+                    )
+                )
             else:
                 for rep in field.split(repetition_sep):
                     fields.append(
-                        parse_field(rep, name, version, encoding_chars, validation_level, reference, force_varies)
+                        parse_field(
+                            rep,
+                            name,
+                            version,
+                            encoding_chars,
+                            validation_level,
+                            reference,
+                            force_varies,
+                            extension_context=extension_context,
+                        )
                     )
         elif name == "MSH_1":
-            fields.append(parse_field(field_sep, name, version, encoding_chars, validation_level, reference))
+            fields.append(
+                parse_field(
+                    field_sep,
+                    name,
+                    version,
+                    encoding_chars,
+                    validation_level,
+                    reference,
+                    extension_context=extension_context,
+                )
+            )
     return fields
 
 
 def parse_field(
-    text, name=None, version=None, encoding_chars=None, validation_level=None, reference=None, force_varies=False
+    text,
+    name=None,
+    version=None,
+    encoding_chars=None,
+    validation_level=None,
+    reference=None,
+    force_varies=False,
+    extension_context=None,
 ):
     """
     Parse the given ER7-encoded field and return an instance of :class:`Field <hl7apy.core.Field>`.
@@ -400,22 +504,56 @@ def parse_field(
     validation_level = _get_validation_level(validation_level)
 
     try:
-        field = Field(name, version=version, validation_level=validation_level, reference=reference)
+        field = Field(
+            name,
+            version=version,
+            validation_level=validation_level,
+            reference=reference,
+            extension_context=extension_context,
+        )
     except InvalidName:
         if force_varies:
             reference = ('leaf', None, 'varies', None, None, -1)
-            field = Field(name, version=version, validation_level=validation_level, reference=reference)
+            field = Field(
+                name,
+                version=version,
+                validation_level=validation_level,
+                reference=reference,
+                extension_context=extension_context,
+            )
         else:
-            field = Field(version=version, validation_level=validation_level, reference=reference)
+            field = Field(
+                version=version,
+                validation_level=validation_level,
+                reference=reference,
+                extension_context=extension_context,
+            )
 
     if name in ('MSH_1', 'MSH_2'):
-        s = SubComponent(datatype='ST', value=text, validation_level=validation_level, version=version)
-        c = Component(datatype='ST', validation_level=validation_level, version=version)
+        s = SubComponent(
+            datatype='ST',
+            value=text,
+            validation_level=validation_level,
+            version=version,
+            extension_context=extension_context,
+        )
+        c = Component(
+            datatype='ST',
+            validation_level=validation_level,
+            version=version,
+            extension_context=extension_context,
+        )
         c.add(s)
         field.add(c)
     else:
         children = parse_components(
-            text, field.datatype, version, encoding_chars, validation_level, field.structure_by_name
+            text,
+            field.datatype,
+            version,
+            encoding_chars,
+            validation_level,
+            field.structure_by_name,
+            extension_context=extension_context,
         )
         if Validator.is_tolerant(validation_level) and is_base_datatype(field.datatype, version) and len(children) > 1:
             field.datatype = None
@@ -424,7 +562,13 @@ def parse_field(
 
 
 def parse_components(
-    text, field_datatype='ST', version=None, encoding_chars=None, validation_level=None, references=None
+    text,
+    field_datatype='ST',
+    version=None,
+    encoding_chars=None,
+    validation_level=None,
+    references=None,
+    extension_context=None,
 ):
     """
     Parse the given ER7-encoded components and return a list of :class:`Component <hl7apy.core.Component>`
@@ -489,14 +633,28 @@ def parse_components(
         if component.strip() or component_name is None or component_name.startswith("VARIES_"):
             components.append(
                 parse_component(
-                    component, component_name, component_datatype, version, encoding_chars, validation_level, reference
+                    component,
+                    component_name,
+                    component_datatype,
+                    version,
+                    encoding_chars,
+                    validation_level,
+                    reference,
+                    extension_context=extension_context,
                 )
             )
     return components
 
 
 def parse_component(
-    text, name=None, datatype='ST', version=None, encoding_chars=None, validation_level=None, reference=None
+    text,
+    name=None,
+    datatype='ST',
+    version=None,
+    encoding_chars=None,
+    validation_level=None,
+    reference=None,
+    extension_context=None,
 ):
     """
     Parse the given ER7-encoded component and return an instance of
@@ -545,13 +703,32 @@ def parse_component(
     validation_level = _get_validation_level(validation_level)
 
     try:
-        component = Component(name, datatype, version=version, validation_level=validation_level, reference=reference)
+        component = Component(
+            name,
+            datatype,
+            version=version,
+            validation_level=validation_level,
+            reference=reference,
+            extension_context=extension_context,
+        )
     except InvalidName as e:
         if Validator.is_strict(validation_level):
             raise e
-        component = Component(datatype, version=version, validation_level=validation_level, reference=reference)
+        component = Component(
+            datatype,
+            version=version,
+            validation_level=validation_level,
+            reference=reference,
+            extension_context=extension_context,
+        )
     children = parse_subcomponents(
-        text, component.datatype, version, encoding_chars, validation_level, component.structure_by_name
+        text,
+        component.datatype,
+        version,
+        encoding_chars,
+        validation_level,
+        component.structure_by_name,
+        extension_context=extension_context,
     )
     if (
         Validator.is_tolerant(component.validation_level)
@@ -564,7 +741,13 @@ def parse_component(
 
 
 def parse_subcomponents(
-    text, component_datatype='ST', version=None, encoding_chars=None, validation_level=None, references=None
+    text,
+    component_datatype='ST',
+    version=None,
+    encoding_chars=None,
+    validation_level=None,
+    references=None,
+    extension_context=None,
 ):
     """
     Parse the given ER7-encoded subcomponents and return a list of
@@ -633,13 +816,27 @@ def parse_subcomponents(
         if subcomponent.strip() or subcomponent_name is None:
             subcomponents.append(
                 parse_subcomponent(
-                    subcomponent, subcomponent_name, subcomponent_datatype, version, validation_level, reference
+                    subcomponent,
+                    subcomponent_name,
+                    subcomponent_datatype,
+                    version,
+                    validation_level,
+                    reference,
+                    extension_context=extension_context,
                 )
             )
     return subcomponents
 
 
-def parse_subcomponent(text, name=None, datatype='ST', version=None, validation_level=None, reference=None):
+def parse_subcomponent(
+    text,
+    name=None,
+    datatype='ST',
+    version=None,
+    validation_level=None,
+    reference=None,
+    extension_context=None,
+):
     """
     Parse the given ER7-encoded component and return an instance of
     :class:`SubComponent <hl7apy.core.SubComponent>`.
@@ -674,6 +871,7 @@ def parse_subcomponent(text, name=None, datatype='ST', version=None, validation_
         version=version,
         validation_level=validation_level,
         reference=reference,
+        extension_context=extension_context,
     )
 
 

@@ -53,6 +53,7 @@ from hl7apy.exceptions import (
     MessageProfileNotFound,
     OperationNotAllowed,
 )
+from hl7apy.extensions import ExtensionContext, get_extension_reference
 from hl7apy.factories import datatype_factory
 from hl7apy.validation import Validator
 
@@ -446,6 +447,7 @@ class ElementList(MutableSequence):
                 'reference': reference['ref'],
                 'validation_level': self.element.validation_level,
                 'version': self.element.version,
+                'extension_context': self.element.extension_context,
             }
             if not traversal_parent:
                 kwargs['parent'] = self.element
@@ -564,10 +566,14 @@ class ElementFinder:
         :return: a dictionary containing the structure data
         """
         if reference is None:
-            try:
-                reference = load_reference(element.name, element.classname, element.version)
-            except (ChildNotFound, KeyError):
-                raise InvalidName(element.classname, element.name)
+            extension_reference = get_extension_reference(element)
+            if extension_reference is not None:
+                reference = extension_reference
+            else:
+                try:
+                    reference = load_reference(element.name, element.classname, element.version)
+                except (ChildNotFound, KeyError):
+                    raise InvalidName(element.classname, element.name)
         if not isinstance(reference, Sequence):
             raise Exception
         return ElementFinder._parse_structure(element, reference)
@@ -645,10 +651,18 @@ class Element:
         'repetitions',
         'reference',
         '_truncation_char',
+        'extension_context',
     ]
 
     def __init__(
-        self, name=None, parent=None, reference=None, version=None, validation_level=None, traversal_parent=None
+        self,
+        name=None,
+        parent=None,
+        reference=None,
+        version=None,
+        validation_level=None,
+        traversal_parent=None,
+        extension_context=None,
     ):
 
         if self.__class__ == Element:
@@ -663,6 +677,9 @@ class Element:
         check_validation_level(validation_level)
         check_version(version)
 
+        if extension_context is not None and not isinstance(extension_context, ExtensionContext):
+            raise OperationNotAllowed("extension_context must be an ExtensionContext instance")
+
         self.validation_level = validation_level
         self.name = name.upper() if name is not None else None
         self.version = version
@@ -673,6 +690,7 @@ class Element:
         self.structure_by_longname = None
         self.ordered_children = None
         self.repetitions = {}
+        self.extension_context = extension_context
         self._find_structure(reference)
         self.parent = parent
         if parent is None:
@@ -726,6 +744,7 @@ class Element:
         if self.child_parser:
             kwargs['version'] = self.version
             kwargs['validation_level'] = self.validation_level
+            kwargs['extension_context'] = self.extension_context
             module = importlib.import_module("hl7apy.parser")
             parser = getattr(module, self.child_parser[0])
             return parser(text, **kwargs)
@@ -736,6 +755,7 @@ class Element:
             kwargs['version'] = self.version
             kwargs['validation_level'] = self.validation_level
             kwargs['encoding_chars'] = self.encoding_chars
+            kwargs['extension_context'] = self.extension_context
             if 'references' not in kwargs:
                 kwargs['references'] = self.structure_by_name
 
@@ -1065,6 +1085,7 @@ class CanBeVaries(Element):
         version=None,
         validation_level=None,
         traversal_parent=None,
+        extension_context=None,
     ):
 
         if self.__class__ == CanBeVaries:
@@ -1089,11 +1110,15 @@ class CanBeVaries(Element):
 
         if name is not None and _valid_child_name(name, 'VARIES'):
             # Set name to None because with a VARIES name the Element would raise an Exception
-            Element.__init__(self, None, parent, reference, version, validation_level, traversal_parent)
+            Element.__init__(
+                self, None, parent, reference, version, validation_level, traversal_parent, extension_context
+            )
             self.name = name.upper()
         else:
             try:
-                Element.__init__(self, name, parent, reference, version, validation_level, traversal_parent)
+                Element.__init__(
+                    self, name, parent, reference, version, validation_level, traversal_parent, extension_context
+                )
             except ChildNotFound:
                 raise InvalidName(self.classname, self.name)
 
@@ -1171,6 +1196,7 @@ class SubComponent(CanBeVaries):
         version=None,
         validation_level=None,
         traversal_parent=None,
+        extension_context=None,
     ):
 
         self._parent = None  # we need to initialize it
@@ -1178,7 +1204,9 @@ class SubComponent(CanBeVaries):
         if not name and datatype is None:
             raise OperationNotAllowed("Cannot instantiate a SubComponent with name and datatype both empty")
 
-        CanBeVaries.__init__(self, name, datatype, parent, reference, version, validation_level, traversal_parent)
+        CanBeVaries.__init__(
+            self, name, datatype, parent, reference, version, validation_level, traversal_parent, extension_context
+        )
 
         if _valid_child_name(name, 'VARIES') and self.datatype is None:
             self.datatype = 'ST'
@@ -1300,6 +1328,7 @@ class Component(SupportComplexDataType, CanBeVaries):
         version=None,
         validation_level=None,
         traversal_parent=None,
+        extension_context=None,
     ):
 
         SupportComplexDataType.__init__(self)
@@ -1307,7 +1336,9 @@ class Component(SupportComplexDataType, CanBeVaries):
         # if datatype == 'varies' and reference is None:
         #     reference = ('leaf', None, 'varies', None, None, -1)
 
-        CanBeVaries.__init__(self, name, datatype, parent, reference, version, validation_level, traversal_parent)
+        CanBeVaries.__init__(
+            self, name, datatype, parent, reference, version, validation_level, traversal_parent, extension_context
+        )
 
         if (
             self.is_unknown()
@@ -1417,6 +1448,7 @@ class Field(SupportComplexDataType):
         version=None,
         validation_level=None,
         traversal_parent=None,
+        extension_context=None,
     ):
 
         SupportComplexDataType.__init__(self)
@@ -1428,7 +1460,9 @@ class Field(SupportComplexDataType):
             reference = ('leaf', None, 'varies', None, None, -1)
 
         try:
-            Element.__init__(self, name, parent, reference, version, validation_level, traversal_parent)
+            Element.__init__(
+                self, name, parent, reference, version, validation_level, traversal_parent, extension_context
+            )
         except InvalidName:
             if _valid_z_field_name(name):
                 datatype = datatype or 'ST'
@@ -1439,7 +1473,9 @@ class Field(SupportComplexDataType):
                         version = get_default_version()
                     dt_struct = load_reference(datatype, "Datatypes_Structs", version)
                     reference = ('sequence', dt_struct, datatype, None, None, -1)
-                Element.__init__(self, name, parent, reference, version, validation_level, traversal_parent)
+                Element.__init__(
+                    self, name, parent, reference, version, validation_level, traversal_parent, extension_context
+                )
             else:
                 raise
 
@@ -1674,22 +1710,52 @@ class Segment(Element):
     cls_attrs = Element.cls_attrs + ['allow_infinite_children', '_last_allowed_child_index', '_last_child_index']
 
     def __init__(
-        self, name=None, parent=None, reference=None, version=None, validation_level=None, traversal_parent=None
+        self,
+        name=None,
+        parent=None,
+        reference=None,
+        version=None,
+        validation_level=None,
+        traversal_parent=None,
+        extension_context=None,
     ):
 
         if name is None:
             raise OperationNotAllowed("Cannot instantiate an unknown Segment")
 
         if _valid_z_segment_name(name):
-            if reference is None:
+            if reference is None and not (
+                isinstance(extension_context, ExtensionContext) and extension_context.has_segment(name)
+            ):
                 reference = ('sequence', ())
 
-            super().__init__(name, parent, reference, version, validation_level, traversal_parent)
+            super().__init__(
+                name,
+                parent,
+                reference,
+                version,
+                validation_level,
+                traversal_parent,
+                extension_context,
+            )
             self.allow_infinite_children = True
-            self._last_allowed_child_index = 0
-            self._last_child_index = 0
+            if self.ordered_children:
+                # the extension definition provides an explicit field structure;
+                # only fields beyond the defined ones are handled generically
+                self._last_allowed_child_index = len(self.ordered_children)
+            else:
+                self._last_allowed_child_index = 0
+            self._last_child_index = self._last_allowed_child_index
         else:
-            super().__init__(name, parent, reference, version, validation_level, traversal_parent)
+            super().__init__(
+                name,
+                parent,
+                reference,
+                version,
+                validation_level,
+                traversal_parent,
+                extension_context,
+            )
 
             last_field = self.ordered_children[-1]
             last_field_structure = self.structure_by_name[last_field]
@@ -1868,12 +1934,27 @@ class Group(Element):
     child_parser = ('parse_segment', 'parse_segments')
 
     def __init__(
-        self, name=None, parent=None, reference=None, version=None, validation_level=None, traversal_parent=None
+        self,
+        name=None,
+        parent=None,
+        reference=None,
+        version=None,
+        validation_level=None,
+        traversal_parent=None,
+        extension_context=None,
     ):
 
         # self.child_classes = (Segment, Group)
         self.child_classes = {"SEG": Segment, "GRP": Group}
-        super().__init__(name, parent, reference, version, validation_level, traversal_parent)
+        super().__init__(
+            name,
+            parent,
+            reference,
+            version,
+            validation_level,
+            traversal_parent,
+            extension_context,
+        )
         if self.name is None and Validator.is_strict(self.validation_level):
             raise OperationNotAllowed("Cannot instantiate an unknown Element with strict validation")
 
@@ -1920,17 +2001,34 @@ class Group(Element):
             element = None
         if element is None:  # not found in self.structure
             if _valid_z_segment_name(name):
-                element = {'cls': Segment, 'name': name, 'ref': ('sequence', ())}
+                element = {
+                    'cls': Segment,
+                    'name': name,
+                    'ref': self._z_segment_reference(name),
+                }
             else:
                 element = find_reference(name, self.child_classes.values(), self.version)
                 if Validator.is_strict(self.validation_level):  # cannot be created if validation is strict
                     raise ChildNotValid(name, self)
         return element
 
+    def _z_segment_reference(self, name):
+        if self.extension_context is not None:
+            reference = self.extension_context.get_segment_reference(name, self.version)
+            if reference is not None:
+                return reference
+        return ('sequence', ())
+
     def parse_child(self, text, child_name=None, reference=None):
         ref = self.find_child_reference(child_name)
         if ref['cls'] == Group:
-            g = Group(child_name, validation_level=self.validation_level, version=self.version, reference=ref['ref'])
+            g = Group(
+                child_name,
+                validation_level=self.validation_level,
+                version=self.version,
+                reference=ref['ref'],
+                extension_context=self.extension_context,
+            )
             g.value = text
             return g
         else:
@@ -1990,7 +2088,15 @@ class Message(Group):
         (see :func:`get_default_encoding_chars <hl7apy.get_default_encoding_chars>`)
     """
 
-    def __init__(self, name=None, reference=None, version=None, validation_level=None, encoding_chars=None):
+    def __init__(
+        self,
+        name=None,
+        reference=None,
+        version=None,
+        validation_level=None,
+        encoding_chars=None,
+        extension_context=None,
+    ):
 
         if reference is not None:
             try:
@@ -2002,11 +2108,11 @@ class Message(Group):
             except TypeError:
                 pass
         try:
-            super().__init__(name, None, reference, version, validation_level)
+            super().__init__(name, None, reference, version, validation_level, extension_context=extension_context)
         except InvalidName:
             if _valid_z_message_name(name):
                 reference = ('sequence', ())
-                super().__init__(name, None, reference, version, validation_level)
+                super().__init__(name, None, reference, version, validation_level, extension_context=extension_context)
             else:
                 raise
 
@@ -2018,7 +2124,13 @@ class Message(Group):
         except (KeyError, TypeError):
             msh_reference = None
 
-        self.msh = Segment('MSH', version=self.version, validation_level=self.validation_level, reference=msh_reference)
+        self.msh = Segment(
+            'MSH',
+            version=self.version,
+            validation_level=self.validation_level,
+            reference=msh_reference,
+            extension_context=self.extension_context,
+        )
         self.encoding_chars = encoding_chars
         self.msh.msh_7 = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
         self.msh.msh_12 = self.version
@@ -2033,7 +2145,11 @@ class Message(Group):
             element = None
         if element is None:  # not found in self.structure
             if _valid_z_segment_name(name):
-                element = {'cls': Segment, 'name': name, 'ref': ('sequence', ())}
+                element = {
+                    'cls': Segment,
+                    'name': name,
+                    'ref': self._z_segment_reference(name),
+                }
             else:
                 element = find_reference(name, self.child_classes.values(), self.version)
                 if not self.is_z_element() and Validator.is_strict(self.validation_level):
