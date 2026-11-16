@@ -24,6 +24,7 @@
 __version__ = "0.3.0"
 
 from .control.characters import Characters
+from .edit import replace_component
 from .parser import Parser
 from .segments import Segment
 from .serializer import Serializer
@@ -37,6 +38,7 @@ __all__ = [
     "Parser",
     "Segment",
     "Serializer",
+    "replace_component",
     "serializer",
     "Token",
     "Tokenizer",

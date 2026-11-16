@@ -18,6 +18,16 @@ class ValidationError(Exception):
     pass
 
 
+class EditConflictError(Exception):
+    """Raised when a scoped raw-text edit is refused.
+
+    The edit is refused if the segment identity matches anything but
+    exactly one segment (the source may have changed since the edit was
+    authorized, or the identity is not unique), or if the addressed
+    component is not present in the identified segment.
+    """
+
+
 # ---------------- Warnings ----------------
 class MissingImplementationWarning(Warning):
     pass
