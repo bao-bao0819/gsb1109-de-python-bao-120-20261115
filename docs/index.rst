@@ -11,6 +11,7 @@ Python-osc - OSC server and client in pure python
    :caption: Contents:
 
    dispatcher
+   dedup
    client
    server
 

@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 ## Unreleased
 
 - Preserve explicit empty-string arguments in message helpers and TCP clients while keeping omitted values argument-free.
+- Add `SequenceDeduplicator` in `pythonosc.dedup`, an ingress gate for sensor readings: per-stream sequence de-duplication with wrap-cycle and restart-epoch isolation, exact-payload duplicate detection, same-sequence conflict quarantine (never last-writer-wins), and a quarantine callback for storing rejected readings separately.
 
 ## [1.10.2]
 

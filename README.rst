@@ -23,6 +23,7 @@ Features
 * TCP support for 1.0 and 1.1 protocol formats
 * int, int64, float, string, double, MIDI, timestamps, blob, nil OSC arguments
 * simple OSC address<->callback matching system
+* sensor reading de-duplication gate with wrap/restart-safe sequence handling and quarantine of duplicates and conflicts
 * support for sending responses from callback handlers in client and server
 * extensive unit test coverage
 * basic client and server examples
