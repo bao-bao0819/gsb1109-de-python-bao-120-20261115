@@ -26,6 +26,7 @@ import struct
 import warnings
 
 from smpplib import consts, exceptions, smpp
+from smpplib.reconcile import RequestFactTable
 
 
 class SimpleSequenceGenerator(object):
@@ -94,6 +95,10 @@ class Client(object):
 
         self._socket = None
 
+        # Request/response reconciliation across disorder, sequence
+        # wrap-around and connection restarts.
+        self.request_fact_table = RequestFactTable()
+
     def __enter__(self):
         return self
 
@@ -140,6 +145,9 @@ class Client(object):
                 self._socket = self._create_socket()
             self._socket.connect((self.host, self.port))
             self.state = consts.SMPP_CLIENT_STATE_OPEN
+            # A (re)built transport opens a new sequence-number generation:
+            # the old in-flight window must not match new-session PDUs.
+            self.request_fact_table.begin_connection()
         except socket.error:
             raise exceptions.ConnectionError("Connection refused")
 
@@ -153,6 +161,9 @@ class Client(object):
             self._socket.close()
             self._socket = None
         self.state = consts.SMPP_CLIENT_STATE_CLOSED
+        # Requests still in-flight can no longer be answered, so they leave
+        # the legal matching window without being completed.
+        self.request_fact_table.close_open_requests()
 
     def _bind(self, command_name, **kwargs):
         """Send bind_transmitter command to the SMSC"""
@@ -218,6 +229,9 @@ class Client(object):
             self.logger.warning(e)
             raise exceptions.ConnectionError()
 
+        if not p.is_response():
+            self.request_fact_table.record_request(p)
+
         return True
 
     def _recv_exact(self, exact_size):
@@ -264,6 +278,10 @@ class Client(object):
         )
 
         self.logger.debug('Read %s PDU', pdu.command)
+
+        # Only responses are reconciled; server-initiated requests such as
+        # deliver_sm are ignored by the fact table.
+        self.request_fact_table.record_response(pdu)
 
         if pdu.is_error():
             return pdu
