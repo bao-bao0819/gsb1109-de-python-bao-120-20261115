@@ -29,6 +29,41 @@ class ObjectPath(object):
         self._path = _components_to_path(self.group, self.channel)
 
     @property
+    def components(self):
+        """ The individual name components of this path as a tuple
+
+            Components are the literal group and channel names, so names
+            containing slashes, quotes or spaces are kept intact.
+        """
+        components = []
+        if self.group is not None:
+            components.append(self.group)
+        if self.channel is not None:
+            components.append(self.channel)
+        return tuple(components)
+
+    @property
+    def parent(self):
+        """ The path of the parent object, or None for the root object
+        """
+        if self.is_root:
+            return None
+        if self.is_group:
+            return ObjectPath()
+        return ObjectPath(self.group)
+
+    def renamed(self, new_name):
+        """ Returns a new path with only the final (most specific) level renamed
+
+            Any other levels of the path are left unchanged.
+        """
+        if self.is_root:
+            raise ValueError("Cannot rename the root object")
+        if self.is_group:
+            return ObjectPath(new_name)
+        return ObjectPath(self.group, new_name)
+
+    @property
     def is_root(self):
         return self.group is None
 
@@ -54,6 +89,17 @@ class ObjectPath(object):
         """ String representation of the object path
         """
         return self._path
+
+    def __repr__(self):
+        return "ObjectPath(%s)" % ", ".join(repr(c) for c in self.components)
+
+    def __eq__(self, other):
+        if isinstance(other, ObjectPath):
+            return self.group == other.group and self.channel == other.channel
+        return NotImplemented
+
+    def __hash__(self):
+        return hash((self.group, self.channel))
 
 
 def _path_components(path):
