@@ -24,6 +24,7 @@ if you need to generate your own OFX-formatted data... ``ofxtools`` is for you!
    client
    parser
    generating
+   performance
    sqlalchemy
    utils
    contributing
