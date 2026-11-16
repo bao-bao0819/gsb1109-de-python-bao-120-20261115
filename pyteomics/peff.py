@@ -21,6 +21,10 @@ Available classes:
   :py:class:`IndexedPEFF` - Parse a PEFF format file in binary-mode, supporting
   direct indexing by header string or by tag.
 
+  :py:class:`PEFFIndexer` - Write a new PEFF version in which a single record
+  annotation is corrected, rebuilding the byte-offset index for the new file
+  without touching the source snapshot.
+
 """
 
 #   Copyright 2018 Joshua Klein, Lev Levitsky
@@ -37,7 +41,10 @@ Available classes:
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
+import io
+import os
 import re
+import tempfile
 try:
     from collections.abc import Sequence as SequenceABC, Mapping
 except ImportError:
@@ -45,6 +52,7 @@ except ImportError:
 from collections import OrderedDict, defaultdict
 
 from .fasta import TwoLayerIndexedFASTA
+from .auxiliary import OffsetIndex, PyteomicsError
 
 
 class Header(Mapping):
@@ -275,3 +283,267 @@ class IndexedPEFF(TwoLayerIndexedFASTA):
                 # multi-value
                 storage[key] = [self._coerce_types(key, v) for v in self._extract_parenthesis_list(value)]
         return Header(storage)
+
+
+class PEFFIndexer(object):
+    """Write a new PEFF version in which exactly one record annotation is
+    corrected.
+
+    The source file and its byte-offset index form a read-only snapshot and
+    are never modified: the corrected record together with all other,
+    byte-identical records is written to a *new* file, accompanied by a
+    *new* byte-offset index in which the offsets affected by the length
+    change are updated.
+
+    Records are addressed solely by their stable record identity, the PEFF
+    tag (``DbUniqueId``). Duplicate display names (e.g. repeated ``PName``
+    values) are never used to guess a target, and an ID that resolves to
+    more than one record is an error.
+
+    Parameters
+    ----------
+    source : str or file
+        The source PEFF file. If a file object, it must be open in *rb* mode.
+    new_path : str, optional
+        Path of the corrected PEFF file. Must not point at `source`.
+        Defaults to the source path with ``.corrected`` inserted before
+        the extension.
+    index_path : str, optional
+        Path of the byte-offset index JSON written for the new file.
+        Must not point at the index of the source file. Defaults to the
+        conventional ``<name>-<ext>-byte-offsets.json`` next to `new_path`.
+    kwargs : passed to the :class:`IndexedPEFF` constructor.
+    """
+
+    _index_suffix = '-byte-offsets.json'
+
+    def __init__(self, source, new_path=None, index_path=None, **kwargs):
+        self._source_path = self._resolve_path(source)
+        self._reader = IndexedPEFF(source, **kwargs)
+        self.new_path = new_path or self._default_new_path(self._source_path)
+        self.index_path = index_path or self._default_index_path(self.new_path)
+        self._guard_snapshot()
+
+    @staticmethod
+    def _resolve_path(source):
+        path = getattr(source, 'name', source)
+        if not isinstance(path, str):
+            raise PyteomicsError(
+                'A file path is required to write a corrected PEFF version, '
+                'got {!r}.'.format(source))
+        return os.path.abspath(path)
+
+    @staticmethod
+    def _default_new_path(source_path):
+        name, ext = os.path.splitext(source_path)
+        return name + '.corrected' + ext
+
+    @classmethod
+    def _default_index_path(cls, peff_path):
+        name, ext = os.path.splitext(peff_path)
+        return '{}-{}{}'.format(name, ext[1:], cls._index_suffix)
+
+    def _guard_snapshot(self):
+        if os.path.abspath(self.new_path) == self._source_path:
+            raise PyteomicsError(
+                'Refusing to overwrite the source PEFF file {!r}; the '
+                'corrected version must be written to a new path.'.format(
+                    self._source_path))
+        if os.path.abspath(self.index_path) == self._default_index_path(
+                self._source_path):
+            raise PyteomicsError(
+                'Refusing to overwrite the byte-offset index of the source '
+                'file {!r}; the new index must be written to a new path.'.format(
+                    self._source_path))
+
+    def _resolve_record(self, record_id):
+        """Return the unique full-header key whose stable tag is `record_id`."""
+        pattern = self._reader.header_pattern
+        group = self._reader.header_group
+        matches = []
+        for full_header in self._reader._offset_index:
+            match = re.match(pattern, full_header)
+            if match and match.group(group) == record_id:
+                matches.append(full_header)
+        if not matches:
+            raise PyteomicsError(
+                'No PEFF record with stable ID {!r} found in {!r}.'.format(
+                    record_id, self._source_path))
+        if len(matches) > 1:
+            raise PyteomicsError(
+                'Stable ID {!r} matches {} records; a unique target is '
+                'required.'.format(record_id, len(matches)))
+        return matches[0]
+
+    @staticmethod
+    def _header_key(header_text):
+        key = header_text.strip()
+        if key.startswith('>'):
+            key = key[1:].strip()
+        return key
+
+    @staticmethod
+    def _is_feature_value(value):
+        """True for parsed PEFF feature containers (a parenthesised tuple
+        or a list of them), as opposed to scalar annotations."""
+        if isinstance(value, (str, bytes)):
+            return False
+        return isinstance(value, (list, SequenceABC))
+
+    def _replace_annotation(self, header_text, key, value):
+        if not isinstance(value, str) or not value:
+            raise PyteomicsError(
+                'The corrected annotation value must be a non-empty string, '
+                'got {!r}.'.format(value))
+        parsed = self._reader.parser(header_text)
+        if key not in parsed:
+            raise PyteomicsError(
+                'Annotation {!r} is not present on record {!r}; only an '
+                'existing annotation can be corrected.'.format(
+                    key, parsed.get('Tag')))
+        if self._is_feature_value(parsed[key]):
+            raise PyteomicsError(
+                'Annotation {!r} is a multi-valued feature; only scalar '
+                'annotations can be corrected.'.format(key))
+        token = re.compile(r'(\\' + re.escape(key) + r'=)(.*?)(?= \\|$)')
+        new_header_text, count = token.subn(
+            lambda match: match.group(1) + value, header_text, count=1)
+        if count != 1:
+            raise PyteomicsError(
+                'Could not locate the {!r} annotation token for '
+                'replacement.'.format(key))
+        reparsed = self._reader.parser(new_header_text)
+        new_value = reparsed[key]
+        if self._is_feature_value(new_value) or str(new_value) != value:
+            raise PyteomicsError(
+                'The corrected value {!r} is not parsed back as the scalar '
+                'value of {!r}; choose a value without parenthesised '
+                'sub-fields.'.format(value, key))
+        for other_key, other_value in parsed.items():
+            if other_key != key and reparsed[other_key] != other_value:
+                raise PyteomicsError(
+                    'Correcting {!r} unexpectedly altered {!r}.'.format(
+                        key, other_key))
+        return new_header_text
+
+    def _build_new_index(self, old_header, new_header, start, delta):
+        new_index = OffsetIndex()
+        new_key = self._header_key(new_header)
+        for full_header, offsets in self._reader._offset_index.items():
+            off_start, off_end = offsets
+            if full_header == old_header:
+                new_index[new_key] = (off_start, off_end + delta)
+            elif off_start > start:
+                new_index[full_header] = (off_start + delta, off_end + delta)
+            else:
+                new_index[full_header] = offsets
+        if not new_index._integrity_check():
+            raise PyteomicsError('Failed to build a consistent offset index.')
+        return new_index
+
+    @staticmethod
+    def _atomic_write(path, data, binary):
+        directory = os.path.dirname(os.path.abspath(path)) or '.'
+        mode = 'wb' if binary else 'w'
+        fd, tmp_path = tempfile.mkstemp(
+            dir=directory, prefix='.' + os.path.basename(path) + '.',
+            suffix='.tmp')
+        try:
+            with os.fdopen(fd, mode) as handle:
+                handle.write(data)
+            os.replace(tmp_path, path)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
+
+    def correct_annotation(self, record_id, key, value):
+        """Correct a single annotation of a single record and write the
+        new PEFF version with an updated index.
+
+        Parameters
+        ----------
+        record_id : str
+            Stable record identity (PEFF tag / ``DbUniqueId``) of the
+            target record.
+        key : str
+            Name of the annotation to correct, e.g. ``'PName'``.
+        value : str
+            New value of the annotation; everything else on the header
+            line stays byte-identical.
+
+        Returns
+        -------
+        IndexedPEFF
+            A fresh reader open on the corrected file. The paths of the new
+            file and its index are available as :attr:`new_path` and
+            :attr:`index_path`.
+        """
+        full_header = self._resolve_record(record_id)
+        start, end = self._reader._offset_index[full_header]
+        with open(self._source_path, 'rb') as handle:
+            handle.seek(start)
+            record = handle.read(end - start)
+        marker = record.find(b'>')
+        if marker == -1:
+            raise PyteomicsError(
+                'Record at offset {} of {!r} does not start with a PEFF '
+                'header line.'.format(start, self._source_path))
+        newline = record.find(b'\n', marker)
+        if newline == -1:
+            newline = len(record)
+        record_prefix = record[:marker]
+        header_bytes = record[marker:newline]
+        record_tail = record[newline:]
+        header_text = header_bytes.decode(self._reader.encoding)
+        new_header_text = self._replace_annotation(header_text, key, value)
+        new_header_bytes = new_header_text.encode(self._reader.encoding)
+        delta = len(new_header_bytes) - len(header_bytes)
+
+        with open(self._source_path, 'rb') as handle:
+            before = handle.read(start)
+            handle.seek(end)
+            after = handle.read()
+        new_data = (before + record_prefix + new_header_bytes
+                    + record_tail + after)
+        new_index = self._build_new_index(
+            full_header, new_header_text, start, delta)
+
+        self._atomic_write(self.new_path, new_data, binary=True)
+        try:
+            self._atomic_write(
+                self.index_path, self._dump_index(new_index), binary=False)
+            with open(self.index_path) as handle:
+                loaded = OffsetIndex.load(handle)
+            normalized = {key: tuple(value) for key, value in loaded.items()}
+            if normalized != dict(new_index):
+                raise PyteomicsError(
+                    'The written byte-offset index does not match the '
+                    'corrected file {!r}.'.format(self.new_path))
+            rebuilt = IndexedPEFF(self.new_path)
+            if rebuilt._offset_index != new_index:
+                raise PyteomicsError(
+                    'The corrected file {!r} does not rebuild the expected '
+                    'byte-offset index.'.format(self.new_path))
+        except BaseException:
+            for path in (self.index_path, self.new_path):
+                if os.path.exists(path):
+                    os.remove(path)
+            raise
+        return rebuilt
+
+    @staticmethod
+    def _dump_index(index):
+        buffer = io.StringIO()
+        index.save(buffer)
+        return buffer.getvalue()
+
+    def close(self):
+        """Close the reader held on the source file."""
+        self._reader.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
