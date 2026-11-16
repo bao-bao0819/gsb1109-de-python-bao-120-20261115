@@ -14,6 +14,18 @@ class EDISyntaxError(Exception):
             super().__init__(f"EDIFACT Syntax Error: {message}")
 
 
+class MessageStructureError(EDISyntaxError):
+    """A message does not follow the segment/group order of its message
+    structure definition.
+
+    Raised when a segment cannot be placed into the message structure of its
+    message type (e.g. because of an illegal segment order) or when a
+    required segment or group is missing. Segments are never reordered to
+    make a message fit its structure; the error always names the offending
+    segment as it appears in the original message.
+    """
+
+
 class ValidationError(Exception):
     pass
 

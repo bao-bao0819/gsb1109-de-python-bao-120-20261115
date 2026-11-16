@@ -26,7 +26,7 @@ import warnings
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from typing import Type, TypeVar
 
-from pydifact.constants import Element, Elements
+from pydifact.constants import EDI_DEFAULT_DIRECTORY, Element, Elements
 from pydifact.control import Characters
 from pydifact.exceptions import (
     EDISyntaxError,
@@ -36,6 +36,7 @@ from pydifact.exceptions import (
 from pydifact.parser import Parser
 from pydifact.segments import Segment, SegmentFactory
 from pydifact.serializer import Serializer
+from pydifact.structure import MatchResult, MessageStructure
 
 T = TypeVar("T", bound="AbstractSegmentsContainer")
 
@@ -376,6 +377,26 @@ class Message(AbstractSegmentsContainer):
             str(len(self.segments) + 2),
             self.reference_number,
         )
+
+    def match_structure(self, directory: str = EDI_DEFAULT_DIRECTORY) -> MatchResult:
+        """Match the message segments against its message structure.
+
+        Restores the segment group hierarchy (SG…) of the message from the
+        message structure definition of the given EDIFACT directory, keeping
+        track of the group paths and their occurrence order (e.g. the second
+        LIN item group of an ORDERS message is ``SG29[2]``).
+
+        Args:
+            directory: The directory name under pydifact.syntax (e.g.
+                ``d24a``) that provides the message structure definition.
+
+        Raises:
+            MessageStructureError: If the segments do not follow the message
+                structure. Segments are never reordered to fit the structure;
+                the error names the offending segment.
+        """
+        structure = MessageStructure.from_directory(self.type, directory)
+        return structure.match(self.segments)
 
     def validate(self) -> None:
         """Validates the message.
