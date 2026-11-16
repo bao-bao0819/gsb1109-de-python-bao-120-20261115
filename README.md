@@ -24,7 +24,6 @@ logging.basicConfig(level='DEBUG')
 
 # Two parts, UCS2, SMS with UDH
 parts, encoding_flag, msg_type_flag = smpplib.gsm.make_parts(u'Привет мир!\n'*10)
-
 client = smpplib.client.Client('example.com', SOMEPORTNUMBER, allow_unknown_opt_params=True)
 
 # Print when obtain message_id
@@ -58,6 +57,48 @@ for part in parts:
 # Enters a loop, waiting for incoming PDUs
 client.listen()
 ```
+
+### Send plan and segment ranges
+
+`make_send_plan()` returns the complete plan without sending anything. It
+chooses the encoding from the text (falling back to UCS-2), counts each GSM
+extension character as two units, keeps UTF-16 surrogate pairs together, and
+recalculates capacity with the actual encoding:
+
+```python
+plan = smpplib.gsm.make_send_plan(u'Hello ^ world' * 30)
+
+plan.encoding          # data_coding value to use
+plan.esm_class         # UDH flag for a concatenated message
+plan.parts             # bytes for short_message, including the UDH
+plan.total_segments
+
+for segment in plan:
+    segment.character_range   # half-open (start, end) in the original text
+    segment.text              # original text covered by this segment
+    segment.body              # encoded payload without the UDH
+    segment.udh               # 05 00 03 <ref> <total> <seq>, or b''
+```
+
+Consecutive segments form a complete, non-overlapping partition of the
+original text. A concatenated UDH always uses the six-byte form
+`05 00 03 <reference> <total> <sequence>`; a single message has no UDH.
+
+If a character cannot be represented, nothing is replaced and no plan is
+returned. `smpplib.exceptions.UnencodableCharacters` reports the zero-based
+positions in the original string:
+
+```python
+try:
+    smpplib.gsm.make_send_plan(u'bad \ud800 text')
+except smpplib.exceptions.UnencodableCharacters as error:
+    error.positions   # [4]
+    error.characters  # ('\ud800',)
+```
+
+`make_parts()` keeps its existing three-item return value
+`(parts, encoding, esm_class)`; the same metadata is also available on the
+returned value as `.plan` and `.character_ranges`.
 You also may want to listen in a thread:
 ```python
 from threading import Thread
