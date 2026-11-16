@@ -1,3 +1,7 @@
+### Unreleased
+
+* New: `smpplib.billing` evidence-based billing ledger reporting business notification count, encoding segment count and gateway confirmed charge count separately; charge amounts require an explicit vendor charge receipt and long-SMS partial failures are reconciled per segment
+
 ### `2.2.1`
 
 * Fix: split message detection #182 #184 (@fpalamour)
