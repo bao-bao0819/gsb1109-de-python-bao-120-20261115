@@ -165,31 +165,42 @@ def _new_transactions(
     tags: dict[int | str, mt940.tags.Tag] | None,
     transaction_boundary: Iterable[str] | None,
     options: Options | None,
+    detail_config: mt940.processors.BankDetailConfig | None,
 ) -> Transactions:
     """Build the collection, passing ``options`` only when there are any.
 
     A :class:`~mt940.models.Transactions` subclass written against 5.0.0 has no
     ``options`` parameter. Leaving the keyword out when it would be ``None``
-    anyway keeps such a subclass working through this module.
+    anyway keeps such a subclass working through this module. The same applies
+    to ``detail_config``.
 
     Args:
         processors: See :func:`parse`.
         tags: See :func:`parse`.
         transaction_boundary: See :func:`parse`.
         options: See :func:`parse`.
+        detail_config: See :func:`parse`.
 
     Returns:
         A fresh, empty collection.
     """
     if options is None:
+        if detail_config is None:
+            return mt940.models.Transactions(
+                processors, tags, transaction_boundary=transaction_boundary
+            )
         return mt940.models.Transactions(
-            processors, tags, transaction_boundary=transaction_boundary
+            processors,
+            tags,
+            transaction_boundary=transaction_boundary,
+            detail_config=detail_config,
         )
     return mt940.models.Transactions(
         processors,
         tags,
         transaction_boundary=transaction_boundary,
         options=options,
+        detail_config=detail_config,
     )
 
 
@@ -201,6 +212,7 @@ def parse(
     transaction_boundary: Iterable[str] | None = None,
     *,
     options: Options | None = None,
+    detail_config: mt940.processors.BankDetailConfig | None = None,
 ) -> Transactions:
     """Parse a source into one collection with statement metadata.
 
@@ -224,6 +236,9 @@ def parse(
             omitted preserves the default grouping rules.
         options: Immutable opt-in behaviour switches. All ten switches default
             to ``False``. See :class:`mt940.options.Options`.
+        detail_config: Explicit structured ``:86:`` subfield layout for a bank.
+            ``None`` keeps the built-in mapping. See
+            :class:`mt940.processors.BankDetailConfig`.
 
     Returns:
         A populated :class:`~mt940.models.Transactions`. Empty or unrecognised
@@ -244,7 +259,7 @@ def parse(
     """
     data = _read(src, encoding, strip_bom=(options or Options()).strip_bom)
     transactions = _new_transactions(
-        processors, tags, transaction_boundary, options
+        processors, tags, transaction_boundary, options, detail_config
     )
     _ = transactions.parse(data)
 
@@ -259,6 +274,7 @@ def parse_statements(
     transaction_boundary: Iterable[str] | None = None,
     *,
     options: Options | None = None,
+    detail_config: mt940.processors.BankDetailConfig | None = None,
 ) -> list[Transactions]:
     """Parse each ``:20:`` statement block into a separate collection.
 
@@ -283,6 +299,8 @@ def parse_statements(
             block's opening reference. Prefer :func:`parse` if ``:20:``
             separates transactions within one statement.
         options: Behaviour switches shared by every collection.
+        detail_config: Structured ``:86:`` layout shared by every collection.
+            ``None`` keeps the built-in mapping.
 
     Returns:
         Collections in source order, including blocks containing balances but
@@ -311,7 +329,9 @@ def parse_statements(
         if not block.strip().startswith(':20:'):
             # Drop any leading header / empty chunk before the first :20:.
             continue
-        transactions = _new_transactions(processors, tags, boundary, options)
+        transactions = _new_transactions(
+            processors, tags, boundary, options, detail_config
+        )
         boundary = transactions.transaction_boundary
         _ = transactions.parse(block)
         statements.append(transactions)

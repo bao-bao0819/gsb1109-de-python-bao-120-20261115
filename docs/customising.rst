@@ -128,5 +128,8 @@ those behaviours unless you include them again.
 :data:`mt940.processors.transaction_details_post_processor_with_space`
 replaces the default structured-details processor when fragments should be
 joined with spaces. The mBank callbacks in :mod:`mt940.processors` extract
-bank-specific codes and references when explicitly registered.
+bank-specific codes and references when explicitly registered. For a bank
+with its own ``:86:`` subfield codes, pass a
+:class:`mt940.processors.BankDetailConfig` as ``detail_config`` instead of
+writing a processor; see :ref:`explicit-bank-detail-config`.
 The :mod:`mt940._types` reference defines the processor protocols.

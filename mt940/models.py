@@ -32,6 +32,8 @@ from .options import Options
 if TYPE_CHECKING:
     from typing_extensions import Self
 
+    from .processors import BankDetailConfig
+
 #: Sentinel for attributes that are absent, as opposed to ``None``.
 _MISSING = object()
 
@@ -550,6 +552,10 @@ class Transactions(Sequence[Transaction]):
             lists are shared. Assign a new list to customise one collection.
         transaction_boundary: Frozen set of extra tag slugs that start a new
             transaction. A following statement tag can fill the placeholder.
+        detail_config: Optional explicit structured ``:86:`` subfield layout.
+            When set, only its configured codes split the text, repeats and
+            unrecognised fragments are retained, and continuation values join
+            without an inserted space. ``None`` keeps the built-in mapping.
         DEFAULT_PROCESSORS: Default slot mapping, copied shallowly on
             construction and unpickling. Statement processors repair February
             dates, remove raw date parts and copy the statement reference. The
@@ -630,7 +636,9 @@ class Transactions(Sequence[Transaction]):
 
         Missing ``transaction_boundary`` and ``options`` attributes get empty
         boundaries and disabled switches to support older pickles. Existing
-        saved values for those attributes are preserved. Returns ``None``.
+        saved values for those attributes are preserved. A missing
+        ``detail_config`` is restored to ``None`` so old pickles keep the
+        built-in structured ``:86:`` mapping. Returns ``None``.
         """
         self.__dict__.update(state)
         self.processors: Processors = self.DEFAULT_PROCESSORS.copy()
@@ -638,6 +646,7 @@ class Transactions(Sequence[Transaction]):
         # written by 5.0.0 predate options.
         _ = self.__dict__.setdefault('transaction_boundary', frozenset())
         _ = self.__dict__.setdefault('options', Options())
+        _ = self.__dict__.setdefault('detail_config', None)
 
     def __init__(
         self,
@@ -646,6 +655,7 @@ class Transactions(Sequence[Transaction]):
         transaction_boundary: Iterable[str] | None = None,
         *,
         options: Options | None = None,
+        detail_config: BankDetailConfig | None = None,
     ) -> None:
         """Create an empty collection with tag and processor overrides.
 
@@ -661,10 +671,17 @@ class Transactions(Sequence[Transaction]):
                 extra boundaries.
             options: Parser switches. Omitted or ``None`` disables all ten
                 fields.
+            detail_config: Explicit structured ``:86:`` subfield layout for a
+                bank. When given, the details post-processor splits only on its
+                configured codes, preserves unrecognised fragments and repeated
+                subfields, and joins each field per its own setting. ``None``
+                uses the built-in mapping. The frozen configuration is stored
+                by reference and never mutated during parsing.
 
         No tags or processors run until :meth:`parse` is called.
         """
         self.options: Options = options or Options()
+        self.detail_config: BankDetailConfig | None = detail_config
         self.processors = self.DEFAULT_PROCESSORS.copy()
         self.tags: MutableMapping[int | str, mt940.tags.Tag] = dict(
             self.default_tags()

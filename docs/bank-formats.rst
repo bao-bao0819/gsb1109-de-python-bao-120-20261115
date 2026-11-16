@@ -187,6 +187,9 @@ default. Use
 when the bank's fragments need a separator. See
 :data:`mt940.processors.DETAIL_KEYS` and
 :data:`mt940.processors.DETAIL_KEYS_APPLICANT_IBAN` for the exact mappings.
+A bank that needs custom codes, wants unrecognised text kept, or must not
+lose repeated subfields can instead supply an explicit layout, described in
+:ref:`explicit-bank-detail-config`.
 
 GVC keywords inside purpose text
 --------------------------------
@@ -244,3 +247,74 @@ spelling and capitalisation. The parser emits all mapped GVC keys, using
 ``amount`` or ``date``. The ``gvc_leading_text`` switch fixes an early ``+``
 interpretation but still drops free text before a genuine keyword. Retain the
 source if that text matters to your import.
+
+.. _explicit-bank-detail-config:
+
+Explicit bank detail configuration
+----------------------------------
+
+The built-in mapping above treats every ``?NN`` as a subfield boundary and
+drops codes it does not know. A bank whose export uses its own codes, embeds
+ordinary text containing ``?``, or repeats a code needs an explicit layout.
+Build :class:`mt940.processors.BankDetailConfig` from
+:class:`mt940.processors.DetailField` entries and pass it as
+``detail_config`` to :func:`mt940.parse`,
+:func:`mt940.parse_statements` or
+:class:`mt940.models.Transactions`.
+
+Each field names the two-digit codes that feed one output key and whether its
+fragments join with a space. Only configured codes open a subfield, so a ``?``
+that is merely part of normal wording is never mistaken for a separator. The
+rules the layout guarantees are:
+
+* unrecognised fragments are kept, marker included, under
+  :data:`mt940.processors.UNRECOGNISED_DETAIL_KEY` instead of being discarded;
+* a repeated code keeps every occurrence and its original position, rather
+  than keeping only the last value;
+* fields default to direct concatenation, so an account number split across
+  continuation lines never gains an inserted space; set ``joined=True`` only
+  for a field such as a name that needs one;
+* the configuration belongs to the collection and is immutable, so parsing a
+  different bank with its own layout never reuses the previous split.
+
+.. code-block:: python
+
+   import mt940
+
+   config = mt940.processors.BankDetailConfig(
+       fields=(
+           mt940.processors.DetailField(
+               'purpose',
+               ('20', '21', '22', '23', '24', '25', '26', '27', '28', '29'),
+           ),
+           mt940.processors.DetailField(
+               'applicant_name', ('32', '33'), joined=True
+           ),
+           mt940.processors.DetailField('bank_specific', ('70', '71')),
+       ),
+   )
+
+   statement = mt940.parse(data, detail_config=config)
+
+With ``:86:166?20DE00?211234?22567890?32Renate?33Richter?70KEEP?20DUP?99UNKNOWN``
+the first transaction's data contains the continuation value without a space,
+both ``?20`` occurrences and the unknown tail preserved:
+
+.. code-block:: pycon
+
+   >>> transaction = statement[0].data
+   >>> transaction['transaction_code']
+   '166'
+   >>> transaction['purpose']
+   'DE001234567890DUP'
+   >>> transaction['applicant_name']
+   'Renate Richter'
+   >>> transaction['bank_specific']
+   'KEEP'
+   >>> transaction['transaction_details']
+   '?99UNKNOWN'
+
+Without ``detail_config`` the built-in mapping stays in force: unknown codes
+are ignored and a repeated code keeps only its last value, exactly as before.
+:data:`mt940.processors.DEFAULT_DETAIL_CONFIG` exposes the built-in layout as
+the same configuration type for inspection or reuse.

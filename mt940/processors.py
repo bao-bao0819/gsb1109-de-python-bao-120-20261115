@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import calendar
 import collections
+import dataclasses
 import functools
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 # Runtime re-exports: 5.0.0 exposed the processor protocols here.
@@ -291,6 +293,280 @@ GVC_KEYS = {
 _GVC_KEY_LENGTH = 4
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class DetailField:
+    """One structured ``:86:`` output field assembled from subfield codes.
+
+    A bank uses two-digit ``?NN`` codes to label subfields. Each code the
+    configuration recognises is mapped to one field; several codes can feed the
+    same field, which is how continuation subfields such as ``?21`` continue
+    the ``?20`` purpose. Codes the configuration does not list are not split
+    on, so a ``?`` that is merely part of ordinary text is never mistaken for a
+    delimiter.
+
+    Attributes:
+        key: Output key stored on the transaction, for example ``purpose``.
+        codes: Two-digit subfield codes whose fragments populate the field.
+        joined: Join the field's fragments with a space when true. Otherwise
+            fragments concatenate directly, which preserves values such as an
+            account number split across continuation lines.
+    """
+
+    key: str
+    codes: tuple[str, ...]
+    joined: bool = False
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class DetailPart:
+    """One fragment produced while splitting structured ``:86:`` text.
+
+    Parts stay in source order, so the original position of every fragment is
+    retained, including unrecognised text and a subfield that appears more
+    than once. Concatenating the parts (re-adding a recognised part's ``?NN``
+    marker) reconstructs the flattened source without rearrangement.
+
+    Attributes:
+        key: Output field name for a recognised subfield, ``''`` for the
+            leading transaction code, or ``None`` for unrecognised text.
+        code: The two-digit subfield code, ``''`` for the leading code text,
+            or ``None`` for an unrecognised fragment.
+        value: The fragment's text. A recognised part omits its ``?NN``
+            header; an unrecognised part keeps the leading ``?`` marker so no
+            source character is lost.
+    """
+
+    key: str | None
+    code: str | None
+    value: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class BankDetailConfig:
+    """Explicit subfield layout a bank uses for structured ``:86:`` details.
+
+    Only the codes listed here are treated as subfield delimiters. Every other
+    ``?`` stays part of the surrounding text, so ordinary text that merely
+    resembles a separator is preserved instead of being split apart.
+
+    Attributes:
+        fields: Output fields in declaration order. Each maps one or more
+            two-digit codes to an output key. The leading three digits before
+            the first delimiter always become the transaction code and do not
+            need a field.
+        code_to_key: Lookup from a recognised code to its output key.
+    """
+
+    fields: tuple[DetailField, ...]
+
+    @property
+    def code_to_key(self) -> Mapping[str, str]:
+        """Map each configured subfield code to its output field name.
+
+        Returns:
+            A read-only mapping built once per call. A code shared by several
+            fields resolves to the first field declaring it.
+        """
+        mapping: collections.OrderedDict[str, str] = collections.OrderedDict()
+        for field in self.fields:
+            for code in field.codes:
+                mapping.setdefault(code, field.key)
+        return mapping
+
+
+def _legacy_detail_config(
+    detail_keys: Mapping[str, str],
+    *,
+    space: bool,
+) -> BankDetailConfig:
+    """Build the built-in layout from a 5.0.0 subfield mapping.
+
+    The flat mapping names primary codes only. The historical continuation
+    rules are re-applied explicitly so the layout stays self-contained:
+    ``21``-``29`` continue the ``20`` purpose field, ``33`` continues ``32``
+    and ``61``-``65`` continue ``60``. Output keys come from the mapping, so
+    the ``applicant_iban`` variant only changes where ``31`` is stored.
+
+    Args:
+        detail_keys: Mapping from subfield code to output key. Its empty-string
+            transaction-code entry is ignored.
+        space: Mark every field space-joined when true. With it off, fragments
+            concatenate directly and continuation values such as an account
+            number keep their exact digits.
+
+    Returns:
+        A detail configuration reproducing the legacy field grouping.
+    """
+    grouped: collections.OrderedDict[str, list[str]] = (
+        collections.OrderedDict()
+    )
+    for code, key in detail_keys.items():
+        if code:
+            grouped.setdefault(key, []).append(code)
+
+    def extend(key: str, codes: tuple[str, ...]) -> None:
+        """Append missing continuation codes to one field's code list."""
+        grouped.setdefault(key, [])
+        for code in codes:
+            if code not in grouped[key]:
+                grouped[key].append(code)
+
+    extend(detail_keys['20'], tuple(f'2{n}' for n in range(1, 10)))
+    extend(detail_keys['32'], ('33',))
+    extend(detail_keys['60'], tuple(f'6{n}' for n in range(1, 6)))
+
+    return BankDetailConfig(
+        fields=tuple(
+            DetailField(key=key, codes=tuple(codes), joined=space)
+            for key, codes in grouped.items()
+        ),
+    )
+
+
+#: Output key under which unrecognised ``:86:`` fragments are retained.
+UNRECOGNISED_DETAIL_KEY = 'transaction_details'
+
+#: Subfield layout reproducing the built-in :data:`DETAIL_KEYS` mapping.
+#: Purpose and additional-purpose fragments concatenate directly, so values
+#: split across continuation lines (for example an account number) never gain
+#: an inserted space.
+DEFAULT_DETAIL_CONFIG: BankDetailConfig = _legacy_detail_config(
+    DETAIL_KEYS, space=False
+)
+
+
+def _split_configured_details(
+    detail_str: str,
+    config: BankDetailConfig,
+) -> list[DetailPart]:
+    """Split structured detail text using only the configured subfield codes.
+
+    A ``?`` opens a recognised subfield only when the next two characters are a
+    configured code. Any other ``?XX`` is not a delimiter: it begins an
+    unrecognised fragment whose text, marker included, is kept in place. A lone
+    trailing ``?`` stays literal text.
+
+    Args:
+        detail_str: Flattened structured detail text with line boundaries
+            already removed.
+        config: The bank's explicit subfield layout.
+
+    Returns:
+        Ordered parts. The text before the first marker is the leading
+        transaction-code part with key and code ``''``. Recognised subfields
+        produce one part per occurrence, so repeats keep every value and their
+        position. Unrecognised fragments have key and code ``None`` and retain
+        their leading ``?`` marker.
+    """
+    code_to_key = config.code_to_key
+    parts: list[DetailPart] = []
+    buffer = ''
+    current_key: str | None = ''
+    current_code: str | None = ''
+    index = 0
+    length = len(detail_str)
+
+    def flush() -> None:
+        """Append the buffered fragment, keeping an empty recognised part."""
+        # Only the leading transaction-code part can legitimately be empty
+        # (empty input or a value beginning with a delimiter). An empty
+        # recognised subfield keeps its part so repeats stay in position.
+        if current_code == '' and not buffer:
+            return
+        parts.append(DetailPart(current_key, current_code, buffer))
+
+    while index < length:
+        if detail_str[index] == '?' and index + 2 < length:
+            code = detail_str[index + 1] + detail_str[index + 2]
+            if code in code_to_key:
+                flush()
+                buffer = ''
+                current_key = code_to_key[code]
+                current_code = code
+                index += 3
+                continue
+            # Not a configured code: the '?' and its two characters are text.
+            flush()
+            buffer = detail_str[index : index + 3]
+            current_key = None
+            current_code = None
+            index += 3
+            continue
+        buffer += detail_str[index]
+        index += 1
+
+    flush()
+    return parts
+
+
+def _assemble_configured_details(
+    parts: list[DetailPart],
+    config: BankDetailConfig,
+) -> dict[str, str | None]:
+    """Group ordered parts back into the transaction's output fields.
+
+    Args:
+        parts: Position-ordered fragments from
+            :func:`_split_configured_details`.
+        config: The layout naming the output fields and their join style.
+
+    Returns:
+        A mapping containing the transaction code, every configured field
+        (``None`` when absent) and, only when unrecognised text exists, the
+        :data:`UNRECOGNISED_DETAIL_KEY` holding those fragments in source
+        order. Recognised fragments join with a space only when their field is
+        configured for it; otherwise they concatenate directly.
+    """
+    fragments: dict[str, list[str]] = collections.defaultdict(list)
+    unrecognised: list[str] = []
+    transaction_code: str | None = None
+
+    for part in parts:
+        if part.code == '':
+            transaction_code = part.value or None
+        elif part.key is None:
+            unrecognised.append(part.value)
+        else:
+            fragments[part.key].append(part.value)
+
+    result: dict[str, str | None] = {'transaction_code': transaction_code}
+    for field in config.fields:
+        values = fragments.get(field.key, [])
+        separator = ' ' if field.joined else ''
+        result[field.key] = separator.join(values) or None
+
+    if unrecognised:
+        result[UNRECOGNISED_DETAIL_KEY] = ''.join(unrecognised)
+    return result
+
+
+def _detail_config_of(
+    transactions: models.Transactions,
+    detail_keys: Mapping[str, str],
+    *,
+    space: bool,
+) -> BankDetailConfig:
+    """Resolve the active detail layout without reusing another parse's state.
+
+    Args:
+        transactions: Collection whose ``detail_config`` attribute may carry an
+            explicit bank layout.
+        detail_keys: Fallback subfield mapping used when the collection does
+            not supply a configuration, normally :data:`DETAIL_KEYS` or
+            :data:`DETAIL_KEYS_APPLICANT_IBAN`.
+        space: Join fallback fields with spaces when true.
+
+    Returns:
+        The collection's own immutable configuration, or a fresh layout built
+        from the supplied mapping. A new fallback object is built every call,
+        so switching banks never inherits a previous collection's split.
+    """
+    configured = getattr(transactions, 'detail_config', None)
+    if isinstance(configured, BankDetailConfig):
+        return configured
+    return _legacy_detail_config(detail_keys, space=space)
+
+
 def _options_of(transactions: models.Transactions) -> Options:
     """Return the options of the collection being parsed.
 
@@ -546,15 +822,24 @@ def transaction_details_post_processor(
     field after adding all mapped outputs, including ``None`` for missing
     fields.
 
+    A collection carrying an explicit
+    :class:`BankDetailConfig` is parsed with that layout: only configured codes
+    split the text, repeats keep every occurrence in position, and unrecognised
+    fragments are retained under :data:`UNRECOGNISED_DETAIL_KEY` rather than
+    discarded. Without an explicit configuration the 5.0.0 mapping and rules
+    apply unchanged.
+
     Args:
-        transactions: Collection supplying ``applicant_iban`` and
-            ``gvc_leading_text`` options. Missing options use disabled
-            defaults.
+        transactions: Collection supplying ``applicant_iban``,
+            ``gvc_leading_text`` and the optional ``detail_config``. Missing
+            options use disabled defaults.
         tag: Unused tag context.
         tag_dict: Capture mapping containing raw ``transaction_details`` text.
         result: Mutable result mapping receiving decoded fields. It must
             contain ``transaction_details`` when input is structured.
         space: Insert a space between structured fragments of the same field.
+            Ignored when the collection supplies its own ``detail_config``,
+            because each field carries its own join style.
 
     Returns:
         The same result mapping. Structured fields overwrite existing values.
@@ -575,16 +860,32 @@ def transaction_details_post_processor(
     details = ''.join(detail.strip('\n\r') for detail in details.splitlines())
 
     if re.match(r'^\d{3}\?\d{2}', details):
-        result.update(
-            _parse_mt940_details(details, space=space, detail_keys=detail_keys)
-        )
+        if isinstance(
+            getattr(transactions, 'detail_config', None), BankDetailConfig
+        ):
+            config = _detail_config_of(
+                transactions, detail_keys, space=space
+            )
+            parts = _split_configured_details(details, config)
+            assembled = _assemble_configured_details(parts, config)
+            # Drop the raw captured value first; the assembler re-adds this key
+            # only when unrecognised fragments have to be retained.
+            result.pop('transaction_details', None)
+            result.update(assembled)
+        else:
+            result.update(
+                _parse_mt940_details(
+                    details, space=space, detail_keys=detail_keys
+                )
+            )
+            del result['transaction_details']
 
         purpose = result.get('purpose')
 
         if purpose and any(gvk in purpose for gvk in GVC_KEYS if gvk):
             result.update(
                 _parse_mt940_gvcodes(
-                    result['purpose'],
+                    purpose,
                     keep_leading_text=options.gvc_leading_text,
                 )
             )
@@ -592,8 +893,6 @@ def transaction_details_post_processor(
         if result.get('purpose'):
             # Remove trailing "BIC" without an actual BIC value
             result['purpose'] = result['purpose'].removesuffix(' BIC')
-
-        del result['transaction_details']
 
     return result
 
