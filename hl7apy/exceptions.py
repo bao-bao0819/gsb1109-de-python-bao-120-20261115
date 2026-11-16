@@ -344,6 +344,92 @@ class LegacyMessageProfile(HL7apyException):
         return 'The message profile provided is not supported anymore'
 
 
+class SchemaManifestError(HL7apyException):
+    """
+    Base class for the errors raised while building or verifying a schema manifest
+    """
+
+
+class ManifestPrivacyError(SchemaManifestError):
+    """
+    Raised when a manifest contains message values instead of schema-only information
+    """
+
+    def __init__(self, path):
+        self.path = path
+
+    def __str__(self):
+        return 'Message value found in schema manifest at {}'.format(self.path)
+
+
+class ManifestMismatch(SchemaManifestError):
+    """
+    Raised when a schema manifest does not describe the local schema anymore
+    """
+
+    def __init__(self, message=None, chain=None):
+        self.message = message
+        self.chain = list(chain) if chain else []
+
+    def __str__(self):
+        message = self.message or 'Schema manifest does not match the local schema'
+        if self.chain:
+            message = '{}: {}'.format(message, format_dependency_chain(self.chain))
+        return message
+
+
+class UnreadableSchemaProfile(SchemaManifestError):
+    """
+    Raised when a message profile cannot be read as a schema definition
+    """
+
+    def __init__(self, name, reason):
+        self.name = name
+        self.reason = reason
+
+    def __str__(self):
+        return 'Cannot read message profile {}: {}'.format(self.name, self.reason)
+
+
+class MissingSchemaDependency(SchemaManifestError):
+    """
+    Raised when a schema dependency (for example a profile extension) is missing.
+
+    The exception carries the complete dependency chain so that the failure can be
+    reproduced and fixed without falling back to the standard HL7 schema.
+    """
+
+    def __init__(self, chain, reason=None):
+        self.chain = list(chain)
+        self.reason = reason
+
+    def __str__(self):
+        message = 'Missing schema dependency: {}'.format(format_dependency_chain(self.chain))
+        if self.reason:
+            message = '{} ({})'.format(message, self.reason)
+        return message
+
+
+def format_dependency_chain(chain):
+    """
+    Format a dependency chain as a readable ``a -> b -> c`` string.
+
+    Each item may be a string or a mapping with ``kind`` and ``name`` keys.
+
+    >>> print(format_dependency_chain(['profile p', {'kind': 'field', 'name': 'QPD_4'}]))
+    profile p -> field QPD_4
+    """
+    parts = []
+    for item in chain:
+        if isinstance(item, dict):
+            kind = item.get('kind')
+            name = item.get('name')
+            parts.append('{} {}'.format(kind, name) if kind else str(name))
+        else:
+            parts.append(str(item))
+    return ' -> '.join(parts)
+
+
 if __name__ == '__main__':
     import doctest
 

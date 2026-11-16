@@ -463,6 +463,45 @@ You just need to specify the file path as input
 
     >>> m.validate(report_file='report')
 
+Schema manifests
+----------------
+
+A message profile is a binary artifact. To assemble and validate the same batch on another machine, create a
+schema manifest that pins the HL7apy version, the HL7 version, every profile artifact and every profile extension
+together with the validation options. The manifest contains schema information only: message values are never written
+to it.
+
+.. code-block:: bash
+
+    python -m hl7apy.manifest build tests/profiles/iti_21 --version 2.5 \
+        --validation-level strict --force-validation --bundle -o bundle/manifest.json
+
+The manifest references profiles by a relative path (``profiles/<name>``) and ``--bundle`` copies each artifact
+next to the manifest. Copy the ``bundle`` directory to the other machine, then verify it before parsing:
+
+.. code-block:: bash
+
+    python -m hl7apy.manifest verify bundle/manifest.json
+
+Verification fails with a dependency chain when a profile or one of its extensions is missing. For example, the
+``QPD_4`` field used by the ITI-21 profile is not part of the standard HL7 2.5 ``QPD`` segment; a profile without
+that field produces:
+
+.. code-block:: text
+
+    Missing schema dependency: entry iti_21 -> message RSP_K21 -> segment QPD -> field QPD_4
+
+The standard HL7 schema is never used as a fallback. The manifest-driven parser selects the entry by message
+structure and exact HL7 version, so different versions in the same batch are reproduced independently:
+
+.. code-block:: python
+
+    >>> from hl7apy.manifest import parse_message_with_manifest
+    >>> message = parse_message_with_manifest(er7_str, 'bundle/manifest.json')  # doctest: +SKIP
+
+The same functions are available from Python: :func:`hl7apy.manifest.build_manifest`,
+:func:`hl7apy.manifest.verify_manifest` and :func:`hl7apy.manifest.parse_message_with_manifest`.
+
 Z Elements
 ----------
 

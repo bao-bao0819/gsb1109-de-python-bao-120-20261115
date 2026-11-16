@@ -8,6 +8,7 @@ HL7apy API documentation.
 .. toctree::
 
     hl7apy
+    manifest
     core
     consts
     parser
