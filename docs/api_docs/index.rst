@@ -11,6 +11,7 @@ HL7apy API documentation.
     core
     consts
     parser
+    migration
     base_datatypes
     factories
     exceptions
