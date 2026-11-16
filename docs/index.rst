@@ -22,6 +22,7 @@ if you need to generate your own OFX-formatted data... ``ofxtools`` is for you!
 
    installation
    client
+   sync
    parser
    generating
    sqlalchemy
