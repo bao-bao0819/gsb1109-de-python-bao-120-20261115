@@ -53,6 +53,7 @@ Source = "https://github.com/csingley/ofxtools"
 
 [project.scripts]
 ofxget = "ofxtools.scripts.ofxget:main"
+ofxledger = "ofxtools.scripts.ofxledger:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
