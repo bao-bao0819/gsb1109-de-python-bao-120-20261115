@@ -96,6 +96,18 @@ class Segment:
     version: str = EDI_DEFAULT_VERSION
     elements: list[Element] = []
 
+    # Character offsets of this segment in the parsed message, and of each
+    # element in `elements` (composites: one range per component). Set by
+    # the parser; None when the segment was created programmatically.
+    source_range: tuple | None = None
+    element_ranges: list | None = None
+    # Byte offsets in the original EDI byte stream, translated from the
+    # character ranges above. Set when parsed via `from_bytes()` or
+    # `from_file()`; multi-byte characters are covered by their whole byte
+    # span, no per-character correspondence is fabricated.
+    byte_range: tuple | None = None
+    byte_ranges: list | None = None
+
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         if "__omitted__" not in cls.__dict__ or getattr(cls, "__omitted__") is False:

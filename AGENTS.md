@@ -24,16 +24,21 @@ raw string → Tokenizer → Token stream → Parser → Segment stream → Segm
 
 ### Core (`pydifact/`)
 
-- `tokenizer.py` / `token.py` – raw string → `Token` objects; handles escape characters.
+- `tokenizer.py` / `token.py` – raw string → `Token` objects; handles escape characters; records character
+  offsets per token.
 - `parser.py` – `Token` stream → `Segment` objects. Detects `UNA` for control characters, reads `UNB` for syntax
-  version/directory.
+  version/directory. Attaches source ranges (`Segment.source_range`/`element_ranges`) to parsed segments.
+- `sourcemap.py` – `decode_with_source_map()` decodes bytes while recording per-character byte origins
+  (`SourceMap`); undecodable bytes become a sentinel recorded as `DecodeError` (never U+FFFD).
 - `segments.py` – `Segment` (tag + elements). `SegmentFactory` picks typed subclasses from `Segment.plugins`;
   subclasses with a `tag` attribute auto-register via `__init_subclass__` (`__omitted__ = True` opts out).
   `Segment.validate()` is XML-driven, definitions cached with `@lru_cache`.
 - `serializer.py` – `Segment` list → EDI string, incl. `UNA` and escaping.
 - `control/characters.py` – the 6 EDIFACT control characters; default `:+.? '`.
 - `segmentcollection.py` – `AbstractSegmentsContainer` → `RawSegmentCollection` (no envelope), `Message`
-  (UNH/UNT), `Interchange` (UNB/UNZ, main entry point: `from_file()`, `from_str()`, `get_messages()`).
+  (UNH/UNT), `Interchange` (UNB/UNZ, main entry point: `from_file()`, `from_bytes()`, `from_str()`,
+  `get_messages()`). `from_bytes()`/`from_file()` isolate undecodable bytes to their field
+  (`EDIEncodingError`) and attach byte ranges to segments.
 - `constants.py` – `Element = str | list[str]`, `Elements = list[Element]`, defaults (`EDI_DEFAULT_DIRECTORY = "d24a"`).
 
 ### Syntax definitions (`pydifact/syntax/`)

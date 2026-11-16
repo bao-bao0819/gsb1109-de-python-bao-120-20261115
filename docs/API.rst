@@ -22,6 +22,11 @@ Serializer
 .. automodule:: pydifact.serializer
     :members:
 
+Source map
+----------
+.. automodule:: pydifact.sourcemap
+    :members:
+
 Tokenizer
 ---------
 .. automodule:: pydifact.tokenizer

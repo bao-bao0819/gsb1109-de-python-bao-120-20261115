@@ -129,6 +129,24 @@ of the `UNA` segment or leading whitespace. Each of them emits a
 `warn_non_conformant=False` (on `Parser`, `from_str()` and `from_file()`) or a
 standard `warnings` filter.
 
+### Locating fields in the original bytes
+
+When parsing from bytes (`from_file()` or `from_bytes()`), every segment keeps
+the byte range of each of its elements and components, so a bad field found
+downstream can be traced back to the original EDI bytes:
+
+```python
+interchange = Interchange.from_file("order.edi")
+bgm = interchange.get_segment("BGM")
+start, end = bgm.byte_ranges[1]  # byte range of the order number field
+```
+
+The ranges survive encoding conversion and release-character (`?`) processing;
+a character decoded from several bytes maps to its whole byte span. Bytes that
+cannot be decoded raise an `EDIEncodingError` isolating the affected field
+(segment, element, component, byte range) instead of silently inserting
+replacement characters.
+
 
 ## Limitations
 

@@ -40,6 +40,24 @@ from pydifact.tokenizer import Tokenizer
 logger = logging.getLogger(__name__)
 
 
+class RawSegment(list):
+    """A segment's raw elements plus their source ranges.
+
+    Behaves like the plain `Elements` list pydifact always used, but
+    additionally carries the character offsets of the segment and of each
+    element/component in the parsed message, so that every field can be
+    traced back to its origin. `element_ranges` is parallel to the list
+    itself; each entry is a `(start, end)` tuple for a simple element, or a
+    list of `(start, end)` tuples for a composite element (one per
+    component).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.source_range: tuple | None = None
+        self.element_ranges: list = []
+
+
 class TokenIterator:
     """Wrapper for token iterator to allow pushing back tokens.
 
@@ -120,12 +138,14 @@ class Parser:
         # for further parsing
 
         # If it starts by UNA - tolerating a BOM/whitespace in front of it
+        offset = 0
         stripped = message.lstrip("\ufeff \t\r\n")
         if stripped.startswith("UNA"):
             if len(stripped) != len(message):
                 self._warn_non_conformant(
                     "Leading whitespace or BOM before the UNA segment."
                 )
+            offset = len(message) - len(stripped)
             message = stripped
             idx_una = 0
             idx_begin = 3
@@ -144,9 +164,17 @@ class Parser:
             idx_end = idx_begin + 6
             characters = Characters.from_str(f"UNA{message[idx_begin:idx_end]}")
 
+            # character range of the UNA segment in the original message
+            una_range = (
+                offset + (idx_una if idx_una == 0 else idx_una + 1),
+                offset + idx_end,
+            )
+
             # remove the UNA segment from the string,
             # ignore everything before UNA because it should be the first segment if una_found.
-            message = message[idx_end:].lstrip("\r\n")
+            rest = message[idx_end:]
+            message = rest.lstrip("\r\n")
+            offset += idx_end + (len(rest) - len(message))
 
         else:
             # if no UNA header present, the default control characters
@@ -156,12 +184,17 @@ class Parser:
 
         # if UNA is available, yield the UNA segment first, even before tokenizing
         if una_found:
-            yield self.factory.create_segment(
+            una_segment = self.factory.create_segment(
                 "UNA", str(characters), validate=self.validate
             )
+            una_segment.source_range = una_range
+            una_segment.element_ranges = [(una_range[1] - 6, una_range[1])]
+            yield una_segment
 
         tokenizer = Tokenizer()
-        token_iterator = TokenIterator(tokenizer.get_tokens(message, characters))
+        token_iterator = TokenIterator(
+            tokenizer.get_tokens(message, characters, offset=offset)
+        )
 
         while True:
             raw_segments = self.convert_tokens_to_raw_segments(token_iterator)
@@ -251,7 +284,7 @@ class Parser:
 
     def convert_tokens_to_raw_segments(
         self, tokens: Iterable[Token]
-    ) -> Iterator[Elements]:
+    ) -> Iterator[RawSegment]:
         """Convert the tokenized message into an array of segments.
 
         Args:
@@ -259,30 +292,35 @@ class Parser:
             characters (Characters): The control characters to use
 
         Returns:
-            Iterator[Segment]: An iterator of Segment objects
+            Iterator[RawSegment]: An iterator of raw segments: the segment's
+                elements, plus the source range of the segment and of each
+                element/component in the parsed message.
         """
 
-        current_segment: Elements = []
+        current_segment = RawSegment()
         data_element: list[str] = []
-        data_element_value: Element
+        component_ranges: list = []
         in_segment = False
         empty_component_counter = 0
+        element_start: int | None = 0
+        segment_start: int | None = 0
+        separator_start: int | None = 0
 
         for token in tokens:
             # If we're in the middle of a segment, check if we've reached the end
             if in_segment:
                 if token.type == Token.Type.TERMINATOR:
                     in_segment = False
-                    if len(data_element) == 0:  # empty element
-                        data_element_value = ""
-                    elif len(data_element) == 1:
-                        # use a str instead of a list
-                        data_element_value = data_element[0]
-                    else:
-                        data_element_value = data_element
-
-                    current_segment.append(data_element_value)
+                    self._append_element(
+                        current_segment,
+                        data_element,
+                        component_ranges,
+                        element_start,
+                        token.start,
+                    )
                     data_element = []
+                    component_ranges = []
+                    current_segment.source_range = (segment_start, token.end)
                     yield current_segment
                     continue
 
@@ -291,27 +329,30 @@ class Parser:
             # because if the next token is a DATA_SEPARATOR, at least we have
             # an empty string to save into the segment then.
             else:
-                current_segment = []
-                # raw_segments.append(current_segment)
+                current_segment = RawSegment()
                 data_element = []
+                component_ranges = []
                 empty_component_counter = 0
+                element_start = token.start
+                segment_start = token.start
                 in_segment = True
 
             # Whenever we reach a data separator (+), we add the currently
             # collected data element to the current segment and reset the
             # data_element to an empty list []
             if token.type == Token.Type.DATA_SEPARATOR:
-                if len(data_element) == 0:  # empty element
-                    data_element_value = ""
-                elif len(data_element) == 1:
-                    data_element_value = data_element[0]
-                else:
-                    data_element_value = data_element
-
-                current_segment.append(data_element_value)
+                self._append_element(
+                    current_segment,
+                    data_element,
+                    component_ranges,
+                    element_start,
+                    token.start,
+                )
 
                 data_element = []
+                component_ranges = []
                 empty_component_counter = 0
+                element_start = token.end
                 continue
 
             # Whenever we reach a component data separator (:), we know that
@@ -320,6 +361,7 @@ class Parser:
             # separators are in a row "23:::56"
             if token.type == Token.Type.COMPONENT_SEPARATOR:
                 empty_component_counter += 1
+                separator_start = token.start
                 continue
 
             # here we can be sure that the token value is normal "content"
@@ -333,16 +375,45 @@ class Parser:
                 ),
             ):
                 data_element.append("")
+                component_ranges.append((separator_start, separator_start))
 
             data_element.append(token.value)
+            component_ranges.append((token.start, token.end))
             empty_component_counter = 0
+
+    @staticmethod
+    def _append_element(
+        segment: RawSegment,
+        data_element: list[str],
+        component_ranges: list,
+        element_start: int | None,
+        element_end: int | None,
+    ) -> None:
+        """Append the collected data element and its source range(s) to the
+        raw segment."""
+        if len(data_element) == 0:  # empty element
+            segment.append("")
+            segment.element_ranges.append((element_start, element_end))
+        elif len(data_element) == 1:
+            # use a str instead of a list
+            segment.append(data_element[0])
+            segment.element_ranges.append((element_start, element_end))
+        else:
+            segment.append(list(data_element))
+            segment.element_ranges.append(list(component_ranges))
 
     def convert_raw_segment_to_segment(
         self,
         raw_segment: Elements,
         directory: str = EDI_DEFAULT_DIRECTORY,
     ) -> Segment:
+        source_range = getattr(raw_segment, "source_range", None)
+        element_ranges = getattr(raw_segment, "element_ranges", None)
         name = raw_segment.pop(0)
+        if element_ranges is not None:
+            # drop the range of the segment tag, so the ranges stay parallel
+            # to the remaining elements
+            element_ranges = element_ranges[1:]
         if isinstance(name, list):
             raise EDISyntaxError(f"Invalid segment name: {name}")
 
@@ -374,10 +445,15 @@ class Parser:
                 f"syntax version {self.version} in UNB header.",
             )
 
-        return self.factory.create_segment(
+        segment = self.factory.create_segment(
             name,
             *raw_segment,
             validate=self.validate,
             version=self.version,
             directory=directory,
         )
+        if source_range is not None:
+            segment.source_range = source_range
+        if element_ranges is not None:
+            segment.element_ranges = element_ranges
+        return segment

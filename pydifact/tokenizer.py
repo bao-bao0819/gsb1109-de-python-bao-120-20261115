@@ -54,8 +54,17 @@ class Tokenizer:
         self._lineno = 0
         self._column = 0
 
+        # The raw index at which the current character starts (including a
+        # preceding escape character), and the offset of the tokenized
+        # message within the original input.
+        self._char_start: int = 0
+        self._offset: int = 0
+
     def get_tokens(
-        self, message: str, characters: Characters | None = None
+        self,
+        message: str,
+        characters: Characters | None = None,
+        offset: int = 0,
     ) -> Iterator[Token]:
         """Convert the passed message into tokens.
 
@@ -63,6 +72,8 @@ class Tokenizer:
             characters: the Control Characters to use for tokenizing.
                 If omitted, use a default set.
             message: The EDI message, without the UNA header
+            offset: The character offset of `message` within the original
+                input; token positions are reported relative to that input.
         Returns:
             Iterator[Token]
         """
@@ -70,6 +81,10 @@ class Tokenizer:
         self.characters = characters or Characters()
         self._char = None
         self._message = iter(message)
+        self._message_index = 0
+        self._lineno = 0
+        self._column = 0
+        self._offset = offset
         self.read_next_char()
 
         self.token_selector = {
@@ -88,6 +103,7 @@ class Tokenizer:
         True, get the one after it and store that character in the internal storage."""
 
         # first, get the next char.
+        self._char_start = self._message_index
         self._char = self.get_next_char()
 
         # If the last character was escaped, this one can't possibly be an escaped one.
@@ -132,10 +148,16 @@ class Tokenizer:
         # a control character
         assert self.characters is not None
 
+        token_start = self._char_start
         if not self.isEscaped and self._char in self.token_selector:
             token_type = self.token_selector[self._char]
             self.store_current_char_and_read_next()
-            token = Token(token_type, self.extract_stored_chars())
+            token = Token(
+                token_type,
+                self.extract_stored_chars(),
+                start=token_start + self._offset,
+                end=self._char_start + self._offset,
+            )
             if token_type == Token.Type.TERMINATOR:
                 while self._char in self.characters.line_terminators:
                     self.read_next_char()
@@ -148,7 +170,12 @@ class Tokenizer:
                 raise EDISyntaxError("Unexpected end of EDI messages.")
             self.store_current_char_and_read_next()
 
-        return Token(Token.Type.CONTENT, self.extract_stored_chars())
+        return Token(
+            Token.Type.CONTENT,
+            self.extract_stored_chars(),
+            start=token_start + self._offset,
+            end=self._char_start + self._offset,
+        )
 
     def is_control_character(self) -> bool:
         """Check if the current character is a control character."""

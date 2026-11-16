@@ -37,13 +37,30 @@ class Token:
         DATA_SEPARATOR = 13  # default +
         TERMINATOR = 14  # default '
 
-    def __init__(self, token_type: Type, value: str):
-        """Creates a Token with a type and a value"""
+    def __init__(
+        self,
+        token_type: Type,
+        value: str,
+        start: int | None = None,
+        end: int | None = None,
+    ):
+        """Creates a Token with a type and a value.
+
+        Parameters:
+            token_type: The type of the token.
+            value: The token's value.
+            start: The character offset at which the token starts in the
+                tokenized message, if known.
+            end: The character offset just after the token's end in the
+                tokenized message, if known.
+        """
         if not isinstance(token_type, self.Type):
             raise TypeError(f"Invalid token type: {token_type}")
 
         self.type = token_type
         self.value = value
+        self.start = start
+        self.end = end
 
     def __str__(self) -> str:
         return f"{self.type.name} Token: '{self.value}'"

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]
 
+### Added
+- Source ranges: parsed segments keep the character offsets of their elements and components
+  (`Segment.source_range`/`element_ranges`), and `Interchange.from_bytes()`/`from_file()` also provide the
+  byte offsets in the original EDI byte stream (`Segment.byte_range`/`byte_ranges`, `Interchange.source_map`),
+  so a bad field found downstream can be located in the original bytes. Ranges survive encoding conversion and
+  release-character processing; multi-byte characters map to their whole byte span without fabricating a
+  per-character correspondence
+- `AbstractSegmentsContainer.from_bytes()` parses EDI directly from a byte stream
+- `EDIEncodingError`: undecodable bytes isolate the affected field (segment tag, element/component position,
+  byte range) instead of silently altering values with replacement characters
+
+### Changed
+- `Interchange.from_file()` reads the file as bytes (no universal-newline translation anymore) and raises
+  `EDIEncodingError` (a `UnicodeError` and `EDISyntaxError`) for undecodable content
+
 ### Fixed
 - Honor `break_lines=True` after the UNA header when serializing an empty segment list.
 

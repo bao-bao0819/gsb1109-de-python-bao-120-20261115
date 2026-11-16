@@ -29,6 +29,7 @@ from typing import Type, TypeVar
 from pydifact.constants import Element, Elements
 from pydifact.control import Characters
 from pydifact.exceptions import (
+    EDIEncodingError,
     EDISyntaxError,
     NonConformantEDIWarning,
     ValidationError,
@@ -36,8 +37,99 @@ from pydifact.exceptions import (
 from pydifact.parser import Parser
 from pydifact.segments import Segment, SegmentFactory
 from pydifact.serializer import Serializer
+from pydifact.sourcemap import DecodeError, SourceMap, decode_with_source_map
 
 T = TypeVar("T", bound="AbstractSegmentsContainer")
+
+
+def _locate_char_position(
+    segment: Segment, char_pos: int
+) -> tuple[int, int | None] | None:
+    """Locate a character position within a segment's elements.
+
+    Returns:
+        A tuple (element index, component index or None), or None if the
+        position is not covered by any of the segment's element ranges.
+    """
+    if not segment.element_ranges:
+        return None
+    for element_index, entry in enumerate(segment.element_ranges):
+        if isinstance(entry, tuple):
+            start, end = entry
+            if start is not None and end is not None and start <= char_pos < end:
+                return (element_index, None)
+        elif isinstance(entry, list):
+            for component_index, component_range in enumerate(entry):
+                start, end = component_range
+                if start is not None and end is not None and start <= char_pos < end:
+                    return (element_index, component_index)
+    return None
+
+
+def _isolate_decode_errors(
+    segments: Iterable[Segment], decode_errors: list[DecodeError]
+) -> Iterator[Segment]:
+    """Raise an `EDIEncodingError` for the segment containing undecodable bytes.
+
+    Undecodable bytes were replaced by a sentinel character during decoding;
+    this wrapper watches the parsed segments and raises as soon as the
+    segment holding such a sentinel appears, so the error is isolated to
+    exactly that field instead of silently altering its value.
+    """
+    for segment in segments:
+        for error in decode_errors:
+            location = _locate_char_position(segment, error.char_pos)
+            if location is not None:
+                element_index, component_index = location
+                position = f"element {element_index}"
+                if component_index is not None:
+                    position += f", component {component_index}"
+                raise EDIEncodingError(
+                    f"Undecodable bytes in segment '{segment.tag}', {position}: "
+                    f"bytes {error.byte_start}..{error.byte_end} of the "
+                    f"original EDI byte stream ({error.reason}).",
+                    byte_range=(error.byte_start, error.byte_end),
+                    segment_tag=segment.tag,
+                    element_index=element_index,
+                    component_index=component_index,
+                    reason=error.reason,
+                )
+        yield segment
+    # errors that no segment covers (e.g. in skipped content between
+    # segments) still must not pass silently
+    if decode_errors:
+        error = decode_errors[0]
+        raise EDIEncodingError(
+            f"Undecodable bytes outside of any segment: bytes "
+            f"{error.byte_start}..{error.byte_end} of the original EDI byte "
+            f"stream ({error.reason}).",
+            byte_range=(error.byte_start, error.byte_end),
+            reason=error.reason,
+        )
+
+
+def _attach_byte_ranges(segment: Segment, source_map: SourceMap) -> None:
+    """Translate a segment's character source ranges into byte ranges."""
+    if segment.source_range is not None and None not in segment.source_range:
+        segment.byte_range = source_map.byte_span(*segment.source_range)
+    if segment.element_ranges is None:
+        return
+    byte_ranges: list = []
+    for entry in segment.element_ranges:
+        if isinstance(entry, tuple) and None not in entry:
+            byte_ranges.append(source_map.byte_span(*entry))
+        elif isinstance(entry, list):
+            byte_ranges.append(
+                [
+                    source_map.byte_span(*component_range)
+                    if None not in component_range
+                    else None
+                    for component_range in entry
+                ]
+            )
+        else:
+            byte_ranges.append(None)
+    segment.byte_ranges = byte_ranges
 
 
 class AbstractSegmentsContainer:
@@ -84,6 +176,12 @@ class AbstractSegmentsContainer:
         # Flag whether the UNA header is present
         self.has_una_segment = False
 
+        # Map from character offsets in the parsed message to byte offsets
+        # in the original EDI byte stream; set when created via from_bytes()
+        # or from_file().
+        self.source_map: SourceMap | None = None
+        self.source_encoding: str | None = None
+
     @classmethod
     def from_str(
         cls: Type[T],
@@ -120,6 +218,69 @@ class AbstractSegmentsContainer:
             validate=validate,
             warn_non_conformant=parser.warn_non_conformant,
         )
+
+    @classmethod
+    def from_bytes(
+        cls: Type[T],
+        data: bytes,
+        encoding: str = "iso8859-1",
+        parser: Parser | None = None,
+        characters: Characters | None = None,
+        validate: bool = True,
+        warn_non_conformant: bool = True,
+    ) -> T:
+        """Create an instance from a byte stream.
+
+        The bytes are decoded while recording which source bytes produced
+        which characters, so every parsed segment keeps the byte ranges of
+        its elements and components (`Segment.byte_range`/`byte_ranges`) for
+        locating a field in the original EDI bytes. Where several bytes form
+        one character, the whole byte span is reported; no per-character
+        correspondence is fabricated.
+
+        Args:
+            data: The EDI content as bytes.
+            encoding: The encoding to decode the bytes with.
+            parser: A parser to convert the tokens to segments; defaults to `Parser`.
+            characters: The set of control characters.
+            validate: Whether to validate the content. If a `parser` is given,
+                its own `validate` setting applies to the parsed segments.
+            warn_non_conformant: Whether to emit a `NonConformantEDIWarning` for
+                accepted deviations from the EDIFACT specification. If a `parser`
+                is given, its own setting applies.
+
+        Raises:
+            LookupError: If the specified encoding is not recognized.
+            EDIEncodingError: If the bytes cannot be decoded. The error is
+                isolated to the affected field (segment tag, element and
+                component position, byte range); undecodable bytes are never
+                silently replaced by substitute characters.
+        """
+        codecs.lookup(encoding)
+        decoded = decode_with_source_map(bytes(data), encoding)
+        if parser is None:
+            parser = Parser(
+                characters=characters,
+                # validation must not trip over the sentinel characters that
+                # mark undecodable bytes; an EDIEncodingError isolating the
+                # field is raised instead
+                validate=validate and not decoded.errors,
+                warn_non_conformant=warn_non_conformant,
+            )
+        segments: Iterable[Segment] = parser.parse(decoded.text)
+        if decoded.errors:
+            segments = _isolate_decode_errors(segments, decoded.errors)
+        container = cls.from_segments(
+            segments=segments,
+            characters=parser.characters,
+            validate=validate,
+            warn_non_conformant=parser.warn_non_conformant,
+        )
+        container.source_map = decoded.source_map
+        container.source_encoding = encoding
+        for segment in container.segments:
+            _attach_byte_ranges(segment, decoded.source_map)
+        return container
 
     @classmethod
     def from_segments(
@@ -533,6 +694,9 @@ class Interchange(AbstractSegmentsContainer):
     ) -> "Interchange":
         """Create an Interchange instance from a file.
 
+        The file is read as bytes and decoded like `from_bytes()`, so all
+        segments keep the byte ranges of their elements in the file.
+
         Args:
             file : str
                 The full path to a file that contains an EDI message.
@@ -557,14 +721,20 @@ class Interchange(AbstractSegmentsContainer):
                 If the specified file is not found.
             LookupError
                 If the specified encoding is not recognized.
+            EDIEncodingError
+                If the file contains bytes that are not decodable with the
+                given encoding. The error isolates the affected field;
+                undecodable bytes are never silently replaced by substitute
+                characters.
         """
         # codecs.lookup raises an LookupError if given codec was not found:
         codecs.lookup(encoding)
 
-        with open(file, encoding=encoding) as f:
-            collection = f.read()
-        return cls.from_str(
-            collection,
+        with open(file, "rb") as f:
+            data = f.read()
+        return cls.from_bytes(
+            data,
+            encoding=encoding,
             parser=parser,
             validate=validate,
             warn_non_conformant=warn_non_conformant,
