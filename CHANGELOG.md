@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]
 
+### Added
+- `pydifact.audit` for layer-by-layer envelope auditing: `UNB`/`UNZ` reference
+  and message count, plus `UNH`/`UNT` reference and segment count per message.
+  The original envelope segments are kept as evidence, and `Interchange.audit()`
+  exposes the report. A bad count in one message no longer hides its siblings;
+  a missing trailer reports `truncated`, a present but wrong trailer `mismatch`.
+- `pydifact.archive` audits several interchanges/files as one archive, keeping
+  every interchange (including complete empty exchanges) as separate evidence.
+- `python -m pydifact.archive_cli` prints the layered archive report (text or
+  `--json`) and exits with a status-specific code (`ok`/`mismatch`/`truncated`/
+  `error`).
+
 ### Fixed
+- `Interchange` and `Message` now keep the envelope segments they were parsed
+  from (`header_segment`/`footer_segment`) instead of discarding them.
 - Honor `break_lines=True` after the UNA header when serializing an empty segment list.
 
 [0.3.0] - 2026-10-27

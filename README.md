@@ -129,6 +129,35 @@ of the `UNA` segment or leading whitespace. Each of them emits a
 `warn_non_conformant=False` (on `Parser`, `from_str()` and `from_file()`) or a
 standard `warnings` filter.
 
+### Envelope audit
+
+`pydifact.audit` checks both envelope layers and keeps the original segments as
+evidence: the `UNB`/`UNZ` interchange reference and `UNZ` message count, plus the
+`UNH`/`UNT` message reference and `UNT` segment count of every message.
+
+```python
+from pydifact.audit import audit_file
+
+report = audit_file("incoming.edi")
+print(report.status)                       # ok / mismatch / truncated / error
+for message in report.messages:
+    print(message.index, message.status, message.unh, message.unt)
+    print(message.declared_segment_count, message.actual_segment_count)
+```
+
+A wrong count in one message is reported on that message only; its sibling
+messages are still returned. A file that ends before its `UNZ` (or before a
+`UNT`) is reported as `truncated`, while a trailer that is present but carries a
+wrong count or reference is reported as `mismatch`. `report.validate()` raises
+`EDISyntaxError` only for structural faults.
+
+Use `pydifact.archive.audit_archive()` to audit several interchanges (files,
+directories, ZIP archives, or several interchanges in one string) together. Each
+interchange is audited separately, so an empty interchange is still reported
+with its `UNB`/`UNZ` evidence, and a truncated one does not hide the others.
+`python -m pydifact.archive_cli <path>` prints the same layered report; its exit
+code distinguishes `ok` (0), `mismatch` (1), `truncated` (2) and structural
+`error` (3).
 
 ## Limitations
 

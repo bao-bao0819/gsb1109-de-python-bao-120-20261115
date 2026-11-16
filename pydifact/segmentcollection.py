@@ -84,6 +84,16 @@ class AbstractSegmentsContainer:
         # Flag whether the UNA header is present
         self.has_una_segment = False
 
+        # The original envelope segments as they were read, kept as evidence
+        # for auditing references and control counts.
+        self.header_segment: Segment | None = None
+        self.footer_segment: Segment | None = None
+        self.una_segment: Segment | None = None
+        # Whether this container was created by parsing input (as opposed to
+        # being assembled in memory).  Auditing uses this to tell a truly
+        # missing trailer from a footer that would be crafted on serialization.
+        self.is_parsed = False
+
     @classmethod
     def from_str(
         cls: Type[T],
@@ -486,6 +496,8 @@ class Interchange(AbstractSegmentsContainer):
                             f'composite one: "{segment}"'
                         )
                     message = Message(segment.elements[0], segment.elements[1])
+                    message.header_segment = segment
+                    message.is_parsed = True
                     last_segment = segment
                 else:
                     raise EDISyntaxError(
@@ -493,6 +505,7 @@ class Interchange(AbstractSegmentsContainer):
                     )
             elif segment.tag == "UNT":
                 if message:
+                    message.footer_segment = segment
                     yield message
                     message = None
                     last_segment = segment
@@ -661,10 +674,14 @@ class Interchange(AbstractSegmentsContainer):
             characters=characters,
             extra_header_elements=unb.elements[5:],
         )
+        interchange.is_parsed = True
+        interchange.header_segment = unb
 
-        if first_segment.tag == "UNA" and isinstance(first_segment.elements[0], str):
-            interchange.has_una_segment = True
-            interchange.characters = Characters.from_str(first_segment.elements[0])
+        if first_segment.tag == "UNA":
+            interchange.una_segment = first_segment
+            if isinstance(first_segment.elements[0], str):
+                interchange.has_una_segment = True
+                interchange.characters = Characters.from_str(first_segment.elements[0])
 
         interchange.add_segments(segments)
         return interchange
@@ -683,6 +700,7 @@ class Interchange(AbstractSegmentsContainer):
         """
         if segment.tag == "UNA":
             self.has_una_segment = True
+            self.una_segment = segment
             if not segment.elements or not isinstance(segment.elements[0], str):
                 raise EDISyntaxError(
                     "A UNA segment must contain the service string advice as a "
@@ -690,8 +708,30 @@ class Interchange(AbstractSegmentsContainer):
                 )
             self.characters = Characters.from_str(segment.elements[0])
             return
+        if segment.tag == self.FOOTER_TAG:
+            self.footer_segment = segment
         super().add_segment(segment)
 
     def validate(self) -> None:
-        # TODO: proper validation
-        pass
+        """Validate the interchange envelope.
+
+        Raises `EDISyntaxError` for structural faults (missing/multiple
+        envelope segments, malformed trailers, stray or unmatched segments).
+        Count and reference mismatches are data errors, not structural ones,
+        and are left for `audit()` to report.
+        """
+        from pydifact.audit import audit_interchange
+
+        audit_interchange(self).validate()
+
+    def audit(self):
+        """Return a layer-by-layer envelope audit for this interchange.
+
+        The report keeps the original ``UNB``/``UNZ`` and ``UNH``/``UNT``
+        segments and checks the interchange reference, the ``UNZ`` message
+        count and every message's ``UNT`` segment count.  See
+        :mod:`pydifact.audit`.
+        """
+        from pydifact.audit import audit_interchange
+
+        return audit_interchange(self)

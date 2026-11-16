@@ -2,6 +2,16 @@ API
 ===
 
 
+Audit
+-----
+.. automodule:: pydifact.audit
+    :members:
+
+Archive
+-------
+.. automodule:: pydifact.archive
+    :members:
+
 Parser
 ------
 .. automodule:: pydifact.parser
