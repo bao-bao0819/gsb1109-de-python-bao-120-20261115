@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 ## Unreleased
 
+- Added `osc_columns` module to split OSC message arguments (including nested arrays) into columnar records keeping nested paths, type tags and original packet ranges, and to rebuild messages from them.
+
 - Preserve explicit empty-string arguments in message helpers and TCP clients while keeping omitted values argument-free.
 
 ## [1.10.2]
