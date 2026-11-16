@@ -12,6 +12,7 @@
       "mt940",
       "mt940.JSONEncoder",
       "mt940.Options",
+      "mt940.StatementPeriod",
       "mt940.__all__",
       "mt940.__version__",
       "mt940.parse",
@@ -255,6 +256,52 @@
       "mt940.processors.transaction_details_post_processor_with_space",
       "mt940.processors.transactions_to_transaction",
       "mt940.processors.transactions_to_transaction._transactions_to_transaction"
+    ]
+  },
+  "mt940.reconstruct": {
+    "reference": "mt940.reconstruct.html",
+    "guides": [
+      "statements.html"
+    ],
+    "tests": [
+      "mt940_tests/test_reconstruct.py"
+    ],
+    "symbols": [
+      "mt940.reconstruct",
+      "mt940.reconstruct.BalanceBreak",
+      "mt940.reconstruct.BalanceBreak.closing",
+      "mt940.reconstruct.BalanceBreak.from_sequence",
+      "mt940.reconstruct.BalanceBreak.opening",
+      "mt940.reconstruct.BalanceBreak.to_sequence",
+      "mt940.reconstruct.StatementPeriod",
+      "mt940.reconstruct.StatementPeriod.account_identification",
+      "mt940.reconstruct.StatementPeriod.balance_breaks",
+      "mt940.reconstruct.StatementPeriod.closing_balance",
+      "mt940.reconstruct.StatementPeriod.duplicate_pages",
+      "mt940.reconstruct.StatementPeriod.has_issues",
+      "mt940.reconstruct.StatementPeriod.is_closed",
+      "mt940.reconstruct.StatementPeriod.is_complete",
+      "mt940.reconstruct.StatementPeriod.merge",
+      "mt940.reconstruct.StatementPeriod.missing_pages",
+      "mt940.reconstruct.StatementPeriod.opening_balance",
+      "mt940.reconstruct.StatementPeriod.pages",
+      "mt940.reconstruct.StatementPeriod.statement_number",
+      "mt940.reconstruct.StatementPeriod.transactions",
+      "mt940.reconstruct._CLOSING_KEYS",
+      "mt940.reconstruct._FINAL_CLOSING_KEYS",
+      "mt940.reconstruct._OPENING_KEYS",
+      "mt940.reconstruct._balance",
+      "mt940.reconstruct._balances_chain",
+      "mt940.reconstruct._build_period",
+      "mt940.reconstruct._fingerprint",
+      "mt940.reconstruct._freeze",
+      "mt940.reconstruct._group_key",
+      "mt940.reconstruct._is_closed",
+      "mt940.reconstruct._number_key",
+      "mt940.reconstruct._sequence_number",
+      "mt940.reconstruct.models",
+      "mt940.reconstruct.reconstruct",
+      "mt940.reconstruct.utils"
     ]
   },
   "mt940.tags": {

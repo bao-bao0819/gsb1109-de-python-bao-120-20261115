@@ -29,11 +29,13 @@ from .__about__ import __version__
 from .json import JSONEncoder
 from .options import Options
 from .parser import parse, parse_statements
+from .reconstruct import StatementPeriod, reconstruct
 
 #: Supported names exported by ``from mt940 import *``.
 __all__ = [
     'JSONEncoder',
     'Options',
+    'StatementPeriod',
     '__version__',
     'json',
     'models',
@@ -41,6 +43,7 @@ __all__ = [
     'parse_statements',
     'parser',
     'processors',
+    'reconstruct',
     'tags',
     'utils',
 ]

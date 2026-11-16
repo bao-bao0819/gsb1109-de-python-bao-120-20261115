@@ -55,8 +55,46 @@ one ``:20:`` and several pages remains one statement. Repeated ``:60M:`` and
 ``:62M:`` values overwrite the earlier intermediate balances under their
 respective keys. The first-intermediate-balance regression test remains a
 strict expected failure. There is no option that retains every page balance.
-If page balances are required, retain the original input and implement an
-explicit bank-specific page model or processor.
+When each page arrives as its own ``:20:`` block,
+:func:`mt940.reconstruct` reassembles the period as described below.
+
+Reassembling paginated statements
+---------------------------------
+
+Banks that split a long statement into pages repeat the ``:28C:`` statement
+number with a consecutive ``/`` sequence number on every page. Two pages
+only chain when the closing balance of one page equals the opening balance
+of the next page of the same statement. :func:`mt940.reconstruct` groups
+parsed pages by account and statement number, orders them by sequence number
+and reports missing pages, duplicate pages and balance breaks separately:
+
+.. doctest::
+
+   >>> pages: list[mt940.models.Transactions] = mt940.parse_statements(
+   ...     ':20:PAGE-2\n'
+   ...     ':25:DE00BANK0123456789\n'
+   ...     ':28C:7/2\n'
+   ...     ':60M:C240102EUR150,00\n'
+   ...     ':62F:C240102EUR100,00\n'
+   ...     ':20:PAGE-1\n'
+   ...     ':25:DE00BANK0123456789\n'
+   ...     ':28C:7/1\n'
+   ...     ':60F:C240101EUR100,00\n'
+   ...     ':62M:C240101EUR150,00\n'
+   ... )
+   >>> (period,) = mt940.reconstruct(pages)
+   >>> period.is_complete
+   True
+   >>> print(period.opening_balance.amount, period.closing_balance.amount)
+   100.00 EUR 100.00 EUR
+
+The input page order does not change the result, and a page from another
+statement of the same account never fills a gap. A period is only complete
+when a final closing balance closes it and no page is missing or misaligned.
+``missing_pages``, ``duplicate_pages`` and ``balance_breaks`` on
+:class:`mt940.reconstruct.StatementPeriod` describe what was found
+otherwise, and its ``merge`` method combines the retained pages into one
+collection.
 
 When ``:20:`` marks a transaction
 ---------------------------------
