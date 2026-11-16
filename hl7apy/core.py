@@ -43,7 +43,7 @@ from hl7apy import (
     load_reference,
 )
 from hl7apy.base_datatypes import BaseDataType
-from hl7apy.consts import MLLP_ENCODING_CHARS
+from hl7apy.consts import CONTROLLED_VARIES_FIELDS, MLLP_ENCODING_CHARS
 from hl7apy.exceptions import (
     ChildNotFound,
     ChildNotValid,
@@ -1559,6 +1559,10 @@ class Field(SupportComplexDataType):
             self.add(c)
         else:
             super()._set_value(value)
+        if self.parent is not None:
+            # notify the parent segment of the new value: it can be a field that declares
+            # the datatype of a varies sibling (e.g. OBX-2 declares the datatype of OBX-5)
+            self.parent._child_value_changed(self)
 
     def _get_value(self):
         return super()._get_value()
@@ -1704,6 +1708,128 @@ class Segment(Element):
             field_index = int(obj.name[4:])
             if field_index > self._last_child_index:
                 self._last_child_index = field_index
+        self._child_value_changed(obj)
+
+    def _child_value_changed(self, child):
+        """
+        Handle the ``varies`` fields whose actual datatype is declared by another field of the
+        segment (see ``hl7apy.consts.CONTROLLED_VARIES_FIELDS``), e.g. OBX-5, whose datatype is
+        declared by OBX-2. It is called every time a child field is added to the segment or its
+        value changes.
+        """
+        controlled = CONTROLLED_VARIES_FIELDS.get(self.name)
+        if not controlled or child.name is None:
+            return
+        if child.name in controlled:
+            # the child is a controlled field (e.g. OBX_5): resolve its actual datatype
+            if child.datatype in (None, 'varies'):
+                datatype = self._get_controlling_datatype(controlled[child.name])
+                if datatype is not None:
+                    self._resolve_controlled_field(child, datatype)
+        else:
+            # the child can be a controlling field (e.g. OBX_2): revalidate the controlled ones
+            for field_name, control_name in controlled.items():
+                if control_name == child.name:
+                    self._revalidate_controlled_fields(field_name, control_name)
+
+    def _get_controlling_datatype(self, control_name):
+        """
+        Return the datatype declared by the given controlling field (e.g. OBX_2) or ``None``
+        when the field is missing, empty or does not contain a known datatype. In the latter
+        cases the controlled fields keep their unexplained value.
+        """
+        try:
+            control = self.children.indexes[control_name][0]
+        except (KeyError, IndexError):
+            return None
+        value = control.value
+        datatype = value.strip().upper() if value else None
+        if not datatype:
+            return None
+        if is_base_datatype(datatype, self.version):
+            return datatype
+        try:
+            load_reference(datatype, 'Datatypes_Structs', self.version)
+        except (ChildNotFound, KeyError):
+            return None
+        return datatype
+
+    def _revalidate_controlled_fields(self, field_name, control_name):
+        """
+        Revalidate the controlled fields (e.g. OBX_5) after the controlling field (e.g. OBX_2)
+        has changed. Fields still having an unexplained (``varies``) value are resolved using
+        the new datatype; fields already resolved are checked against the new datatype, since
+        it is not allowed to just change the datatype name keeping incompatible components.
+        """
+        datatype = self._get_controlling_datatype(control_name)
+        if datatype is None:
+            # the controlling field is missing or unknown: keep the unexplained values
+            return
+        for field in list(self.children.indexes.get(field_name, ())):
+            current = field.datatype
+            if current in (None, 'varies'):
+                self._resolve_controlled_field(field, datatype)
+            elif current != datatype:
+                self._check_controlled_compatibility(field, datatype)
+                self._resolve_controlled_field(field, datatype)
+
+    def _resolve_controlled_field(self, field, datatype):
+        """
+        Reinterpret the given controlled field using the actual datatype declared by the
+        controlling field, keeping its value. The field is replaced by a new one structured
+        according to the actual datatype, so that it exposes the real datatype and the full
+        components instead of the generic ``varies`` ones.
+        """
+        if field not in self.children.indexes.get(field.name, ()):
+            # the field is no longer a child of the segment (e.g. it has already been
+            # resolved and replaced): nothing to do
+            return
+        text = field.to_er7()
+        reference = self._controlled_field_reference(field, datatype)
+        new_field = Field(
+            field.name,
+            datatype=datatype,
+            reference=reference,
+            version=self.version,
+            validation_level=self.validation_level,
+        )
+        new_field.value = text
+        self.children.replace_child(field, new_field)
+
+    def _controlled_field_reference(self, field, datatype):
+        """
+        Build the reference for a controlled field using the actual datatype and preserving
+        the original field information (e.g. the long name and the table).
+        """
+        try:
+            long_name, table, max_length = field.reference[3], field.reference[4], field.reference[5]
+        except (TypeError, IndexError):
+            long_name, table, max_length = None, None, -1
+        if is_base_datatype(datatype, self.version):
+            return ('leaf', None, datatype, long_name, table, max_length)
+        structure = load_reference(datatype, 'Datatypes_Structs', self.version)
+        return ('sequence', structure, datatype, long_name, table, max_length)
+
+    def _check_controlled_compatibility(self, field, datatype):
+        """
+        Check that the current components of the given field are compatible with the new
+        datatype declared by the controlling field.
+
+        :raises: :class:`OperationNotAllowed <hl7apy.exceptions.OperationNotAllowed>` when the
+            current components cannot be kept with the new datatype
+        """
+        children = list(field.children)
+        if not children:
+            return
+        if is_base_datatype(datatype, self.version):
+            compatible = len(children) == 1 and is_base_datatype(children[0].datatype, self.version)
+        else:
+            compatible = all(c.name is not None and _valid_child_name(c.name, datatype) for c in children)
+        if not compatible:
+            raise OperationNotAllowed(
+                'Cannot change the datatype of {0} to {1}: the current components are not '
+                'compatible with the new datatype'.format(field.name, datatype)
+            )
 
     def add_field(self, name):
         """

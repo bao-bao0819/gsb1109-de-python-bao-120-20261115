@@ -231,7 +231,16 @@ class Validator:
 
                 _check_length(el, ref, warns)
 
-                if el.datatype == 'varies':  # TODO: it should check the real rule
+                if el.datatype == 'varies':
+                    return True
+                if ref[2] == 'varies':
+                    # the varies field has been resolved to the actual datatype declared by
+                    # the controlling field of the segment (e.g. OBX-5 uses the datatype
+                    # declared by OBX-2): validate it against the real datatype structure
+                    if el.datatype is None or is_base_datatype(el.datatype, el.version):
+                        return True
+                    dt_struct = load_reference(el.datatype, 'Datatypes_Structs', el.version)
+                    _check_known_element(el, ('sequence', dt_struct, el.datatype, None, None, -1), errs, warns)
                     return True
                 _check_datatype(el, ref, errs)
 

@@ -53,6 +53,12 @@ DEFAULT_ENCODING_CHARS_27 = {
 #: default hl7 version
 DEFAULT_VERSION = "2.5"
 
+#: Maps a segment name to the ``varies`` fields whose actual datatype is declared by
+#: another field of the same segment (e.g. the datatype of OBX-5 is declared by OBX-2).
+#: For every segment the dictionary maps the controlled field name to the name of the
+#: controlling field.
+CONTROLLED_VARIES_FIELDS = {'OBX': {'OBX_5': 'OBX_2'}}
+
 
 class MLLP_ENCODING_CHARS:
     """

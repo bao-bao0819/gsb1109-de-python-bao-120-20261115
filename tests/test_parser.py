@@ -316,10 +316,43 @@ class TestParser(unittest.TestCase):
         self.assertEqual(s.qpd_8.datatype, 'varies')
 
     def test_parse_segment_containing_varies_field(self):
-        segment = 'OBX|1|ST|1^YYY||ABCDEFG|HJKLMN|||||O'
+        # OBX-2 is missing, so the OBX-5 value is kept unexplained (varies)
+        segment = 'OBX|1||1^YYY||ABCDEFG|HJKLMN|||||O'
         s = parse_segment(segment)
         self.assertEqual(s.obx_5.datatype, 'varies')
+        self.assertEqual(s.obx_5.value, 'ABCDEFG')
         self.assertNotEqual(s.obx_6.datatype, 'varies')
+
+    def test_parse_obx_5_datatype_declared_by_obx_2(self):
+        segment = 'OBX|1|CE|1^YYY||CODE^DESCRIPTION|HJKLMN|||||O'
+        s = parse_segment(segment)
+        self.assertEqual(s.obx_5.datatype, 'CE')
+        self.assertEqual(s.obx_5.ce_1.value, 'CODE')
+        self.assertEqual(s.obx_5.ce_2.value, 'DESCRIPTION')
+        self.assertEqual(s.obx_5.to_er7(), 'CODE^DESCRIPTION')
+
+    def test_parse_obx_5_repetitions_datatype_declared_by_obx_2(self):
+        segment = 'OBX|1|CE|1^YYY||CODE^DESCRIPTION~CODE2^DESCRIPTION2'
+        s = parse_segment(segment)
+        self.assertEqual(len(s.obx_5), 2)
+        self.assertEqual(s.obx_5[0].datatype, 'CE')
+        self.assertEqual(s.obx_5[0].ce_1.value, 'CODE')
+        self.assertEqual(s.obx_5[1].datatype, 'CE')
+        self.assertEqual(s.obx_5[1].ce_2.value, 'DESCRIPTION2')
+        self.assertEqual(s.to_er7(), segment)
+
+    def test_parse_obx_5_with_unknown_obx_2_datatype(self):
+        segment = 'OBX|1|UNKNOWN|1^YYY||ABCDEFG'
+        s = parse_segment(segment)
+        self.assertEqual(s.obx_5.datatype, 'varies')
+        self.assertEqual(s.obx_5.value, 'ABCDEFG')
+
+    def test_parse_obx_5_datatype_declared_by_obx_2_strict(self):
+        segment = 'OBX|1|CE|1^YYY||CODE^DESCRIPTION'
+        s = parse_segment(segment, validation_level=VALIDATION_LEVEL.STRICT)
+        self.assertEqual(s.obx_5.datatype, 'CE')
+        self.assertEqual(s.obx_5.ce_1.value, 'CODE')
+        self.assertEqual(s.obx_5.ce_2.value, 'DESCRIPTION')
 
     def test_parse_fields(self):
         # note: this method seems not to work without segment definition, and also for MSH segment

@@ -666,6 +666,64 @@ class TestSegment(unittest.TestCase):
         zin.zin_4 = 'abc'
         zin.add_field('zin_4')
 
+    def test_obx_5_datatype_declared_by_obx_2(self):
+        s = Segment('OBX')
+        s.obx_2 = 'CE'
+        s.obx_5 = 'CODE^DESCRIPTION'
+        self.assertEqual(s.obx_5.datatype, 'CE')
+        self.assertEqual(s.obx_5.ce_1.value, 'CODE')
+        self.assertEqual(s.obx_5.ce_2.value, 'DESCRIPTION')
+        self.assertEqual(s.obx_5.to_er7(), 'CODE^DESCRIPTION')
+
+    def test_obx_5_datatype_resolved_when_obx_2_is_set_after(self):
+        s = Segment('OBX')
+        s.obx_5 = 'CODE^DESCRIPTION'
+        self.assertEqual(s.obx_5.datatype, 'varies')
+        s.obx_2 = 'CE'
+        self.assertEqual(s.obx_5.datatype, 'CE')
+        self.assertEqual(s.obx_5.ce_1.value, 'CODE')
+        self.assertEqual(s.obx_5.ce_2.value, 'DESCRIPTION')
+
+    def test_obx_5_kept_unexplained_without_obx_2(self):
+        s = Segment('OBX')
+        s.obx_5 = 'SOME^VALUE'
+        self.assertEqual(s.obx_5.datatype, 'varies')
+        self.assertEqual(s.obx_5.value, 'SOME^VALUE')
+
+    def test_obx_2_change_revalidates_compatible_obx_5(self):
+        s = Segment('OBX')
+        s.obx_2 = 'ST'
+        s.obx_5 = '123'
+        self.assertEqual(s.obx_5.datatype, 'ST')
+        s.obx_2 = 'NM'
+        self.assertEqual(s.obx_5.datatype, 'NM')
+        self.assertEqual(s.obx_5.value, '123')
+
+    def test_obx_2_change_with_incompatible_obx_5_raises(self):
+        s = Segment('OBX')
+        s.obx_2 = 'CE'
+        s.obx_5 = 'CODE^DESCRIPTION'
+        with self.assertRaises(OperationNotAllowed):
+            s.obx_2 = 'NM'
+
+    def test_obx_2_change_to_incompatible_complex_datatype_raises(self):
+        s = Segment('OBX')
+        s.obx_2 = 'CE'
+        s.obx_5 = 'CODE^DESCRIPTION'
+        with self.assertRaises(OperationNotAllowed):
+            s.obx_2 = 'CWE'
+
+    def test_obx_5_repetitions_datatype_declared_by_obx_2(self):
+        s = Segment('OBX')
+        s.obx_2 = 'CE'
+        s.obx_5 = 'CODE^DESCRIPTION'
+        s.obx_5[1] = 'CODE2^DESCRIPTION2'
+        self.assertEqual(len(s.obx_5), 2)
+        self.assertEqual(s.obx_5[0].datatype, 'CE')
+        self.assertEqual(s.obx_5[1].datatype, 'CE')
+        self.assertEqual(s.obx_5[1].ce_1.value, 'CODE2')
+        self.assertEqual(s.to_er7(), 'OBX||CE|||CODE^DESCRIPTION~CODE2^DESCRIPTION2')
+
     def test_add_field(self):
         e = Segment('PID', validation_level=VALIDATION_LEVEL.STRICT)
         pid_5 = e.add_field('PID_5')
