@@ -81,6 +81,66 @@ def test_int_data_to_sets():
     assert_equal(mesh.cell_sets, {"grain0": [[0]], "grain1": [[1]]})
 
 
+def _overlapping_sets_mesh():
+    return meshio.Mesh(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 0.0]],
+        {"triangle": [[0, 1, 2], [1, 2, 3], [1, 3, 4]]},
+        cell_sets={
+            "grain0": [[0, 1]],
+            "grain1": [[1, 2]],
+            "empty": [[]],
+        },
+    )
+
+
+def test_sets_to_data_overlap_no_priority():
+    mesh = _overlapping_sets_mesh()
+    with pytest.raises(ValueError, match="grain0.*grain1"):
+        mesh.cell_sets_to_data()
+
+
+def test_sets_to_data_overlap_priority():
+    mesh = _overlapping_sets_mesh()
+    mesh.cell_sets_to_data(priority=["grain1", "grain0", "empty"])
+
+    assert mesh.cell_sets == {}
+    # cell 1 belongs to grain0 and grain1; grain1 has higher priority
+    assert_equal(mesh.cell_data["grain0-grain1-empty"], [[0, 1, 1]])
+
+    # the side table restores all membership relations
+    assert "grain0-grain1-empty" in mesh.cell_sets_side_table
+    mesh.cell_sets_from_side_table()
+    assert_equal(
+        mesh.cell_sets,
+        {"grain0": [[0, 1]], "grain1": [[1, 2]], "empty": [[]]},
+    )
+
+
+def test_sets_to_data_priority_unresolved():
+    mesh = _overlapping_sets_mesh()
+    # neither grain0 nor grain1 is covered by the rules, so the conflict
+    # between them remains unresolved
+    with pytest.raises(ValueError, match="do not resolve"):
+        mesh.cell_sets_to_data(priority=["empty"])
+
+
+def test_sets_to_data_priority_nonexistent_set():
+    mesh = _overlapping_sets_mesh()
+    with pytest.raises(ValueError, match="non-existent cell set.*typo"):
+        mesh.cell_sets_to_data(priority=["grain1", "grain0", "typo"])
+
+    # an empty set, on the other hand, is a valid priority entry
+    mesh = _overlapping_sets_mesh()
+    mesh.cell_sets_to_data(priority=["empty", "grain1", "grain0"])
+    assert_equal(mesh.cell_data["grain0-grain1-empty"], [[0, 1, 1]])
+
+
+def test_sets_to_data_priority_duplicate():
+    mesh = _overlapping_sets_mesh()
+    with pytest.raises(ValueError, match="duplicate"):
+        mesh.cell_sets_to_data(priority=["grain0", "grain1", "grain0"])
+
+
 def test_gh_1165():
     mesh = meshio.Mesh(
         [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],

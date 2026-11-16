@@ -156,6 +156,10 @@ class Mesh:
         self.field_data = {} if field_data is None else field_data
         self.point_sets = {} if point_sets is None else point_sets
         self.cell_sets = {} if cell_sets is None else cell_sets
+        # Side tables saved by cell_sets_to_data(), keyed by the name of the
+        # cell_data array they accompany. They allow restoring all original
+        # cell-set membership relations.
+        self.cell_sets_side_table = {}
         self.gmsh_periodic = gmsh_periodic
         self.info = info
 
@@ -313,34 +317,182 @@ class Mesh:
         warn("meshio.Mesh.read is deprecated, use meshio.read instead")
         return read(path_or_buf, file_format)
 
-    def cell_sets_to_data(self, data_name: str | None = None):
-        # If possible, convert cell sets to integer cell data. This is possible if all
-        # cells appear exactly in one group.
+    def cell_sets_to_data(
+        self,
+        data_name: str | None = None,
+        priority: list[str] | None = None,
+    ) -> None:
+        """Convert cell sets to single-valued integer cell data.
+
+        The target format only provides a single material value per cell, but
+        cell sets may overlap, i.e., one cell can belong to several sets. The
+        optional `priority` lists set names from highest to lowest priority
+        and is used to resolve such conflicts. If sets overlap and the given
+        priority rules do not resolve all conflicts (or none are given at
+        all), a ValueError listing the conflicts is raised.
+
+        In any case, a side table is stored in `self.cell_sets_side_table`
+        from which all original membership relations can be restored, see
+        `cell_sets_from_side_table()`.
+        """
+        if len(self.cell_sets) == 0:
+            return
+
+        set_names = list(self.cell_sets.keys())
+
+        # A set is empty if it exists, but has no members in any cell block.
+        # This is not the same as a set that does not exist at all.
+        empty_sets = [
+            name
+            for name, member_list in self.cell_sets.items()
+            if all(members is None or len(members) == 0 for members in member_list)
+        ]
+
+        if priority is not None:
+            duplicates = [name for name in set(priority) if priority.count(name) > 1]
+            if duplicates:
+                raise ValueError(
+                    "Priority rules contain duplicate cell set(s): "
+                    + ", ".join(sorted(duplicates))
+                )
+            nonexistent = [name for name in priority if name not in self.cell_sets]
+            if nonexistent:
+                existing = [
+                    f"{name} (empty)" if name in empty_sets else name
+                    for name in set_names
+                ]
+                raise ValueError(
+                    "Priority rules refer to non-existent cell set(s): "
+                    + ", ".join(nonexistent)
+                    + ". Existing cell sets: "
+                    + ", ".join(existing)
+                )
+
         default_value = -1
-        if len(self.cell_sets) > 0:
-            intfun = []
-            for k, c in enumerate(zip(*self.cell_sets.values())):
-                # Go for -1 as the default value. (NaN is not int.)
-                arr = np.full(len(self.cells[k]), default_value, dtype=int)
-                for i, cc in enumerate(c):
-                    if cc is None:
-                        continue
-                    arr[cc] = i
-                intfun.append(arr)
 
-            for item in intfun:
-                num_default = np.sum(item == default_value)
-                if num_default > 0:
-                    warn(
-                        f"{num_default} cells are not part of any cell set. "
-                        f"Using default value {default_value}."
-                    )
-                    break
+        # Build the full membership table (one boolean row per cell, one
+        # column per set) and collect all conflicts, i.e., cells that belong
+        # to more than one set.
+        membership = []
+        conflicts = []
+        for k in range(len(self.cells)):
+            table = np.zeros((len(self.cells[k]), len(set_names)), dtype=bool)
+            for i, member_list in enumerate(self.cell_sets.values()):
+                members = member_list[k]
+                if members is None:
+                    continue
+                table[np.asarray(members, dtype=np.intp), i] = True
+            membership.append(table)
+            for cell in np.where(table.sum(axis=1) > 1)[0]:
+                names = [name for name, m in zip(set_names, table[cell]) if m]
+                conflicts.append((k, int(cell), names))
 
-            if data_name is None:
-                data_name = "-".join(self.cell_sets.keys())
-            self.cell_data[data_name] = intfun
-            self.cell_sets = {}
+        def format_conflicts(items):
+            lines = [
+                f"cell block {k} ('{self.cells[k].type}'), cell {cell}: "
+                + ", ".join(names)
+                for k, cell, names in items[:10]
+            ]
+            if len(items) > 10:
+                lines.append(f"... and {len(items) - 10} more")
+            return "\n".join(lines)
+
+        # Resolve conflicts according to the priority rules. Sets not listed
+        # in `priority` get the lowest possible rank; if the best rank is
+        # shared by more than one set, the conflict remains unresolved.
+        resolutions = {}
+        if conflicts:
+            if priority is None:
+                raise ValueError(
+                    f"Cell sets overlap in {len(conflicts)} cell(s) and no "
+                    "priority rules were given to resolve the conflicts:\n"
+                    + format_conflicts(conflicts)
+                )
+            rank = {name: r for r, name in enumerate(priority)}
+            index_of = {name: i for i, name in enumerate(set_names)}
+            unresolved = []
+            for k, cell, names in conflicts:
+                best_rank = min(rank.get(name, np.inf) for name in names)
+                winners = [
+                    name for name in names if rank.get(name, np.inf) == best_rank
+                ]
+                if np.isinf(best_rank) or len(winners) > 1:
+                    unresolved.append((k, cell, names))
+                else:
+                    resolutions[(k, cell)] = index_of[winners[0]]
+            if unresolved:
+                raise ValueError(
+                    "The given priority rules do not resolve "
+                    f"{len(unresolved)} conflict(s):\n"
+                    + format_conflicts(unresolved)
+                )
+
+        intfun = []
+        for k, member_lists in enumerate(zip(*self.cell_sets.values())):
+            # Go for -1 as the default value. (NaN is not int.)
+            arr = np.full(len(self.cells[k]), default_value, dtype=int)
+            for i, cc in enumerate(member_lists):
+                if cc is None:
+                    continue
+                arr[cc] = i
+            intfun.append(arr)
+
+        # apply the priority resolutions
+        for (k, cell), i in resolutions.items():
+            intfun[k][cell] = i
+
+        for item in intfun:
+            num_default = np.sum(item == default_value)
+            if num_default > 0:
+                warn(
+                    f"{num_default} cells are not part of any cell set. "
+                    f"Using default value {default_value}."
+                )
+                break
+
+        if data_name is None:
+            data_name = "-".join(self.cell_sets.keys())
+        self.cell_data[data_name] = intfun
+
+        # Save a side table from which all membership relations can be
+        # restored, even those lost to the single-valued data above.
+        self.cell_sets_side_table[data_name] = {
+            "set_names": set_names,
+            "default_value": default_value,
+            "membership": membership,
+        }
+
+        self.cell_sets = {}
+
+    def cell_sets_from_side_table(self, data_name: str | None = None) -> None:
+        """Restore cell_sets from a side table saved by cell_sets_to_data().
+
+        Unlike cell_data_to_sets(), this also recovers the membership
+        relations that were lost when overlapping sets were flattened into
+        single-valued cell data.
+        """
+        if not self.cell_sets_side_table:
+            raise ValueError("No cell-set side table has been saved.")
+        if data_name is None:
+            if len(self.cell_sets_side_table) > 1:
+                raise ValueError(
+                    "More than one cell-set side table has been saved; "
+                    "specify data_name. Available: "
+                    + ", ".join(self.cell_sets_side_table)
+                )
+            data_name = next(iter(self.cell_sets_side_table))
+        if data_name not in self.cell_sets_side_table:
+            raise ValueError(
+                f"No cell-set side table saved under '{data_name}'. "
+                "Available: " + ", ".join(self.cell_sets_side_table)
+            )
+
+        table = self.cell_sets_side_table[data_name]
+        membership = table["membership"]
+        self.cell_sets = {
+            name: [np.where(block[:, i])[0] for block in membership]
+            for i, name in enumerate(table["set_names"])
+        }
 
     def point_sets_to_data(self, join_char: str = "-") -> None:
         # now for the point sets
