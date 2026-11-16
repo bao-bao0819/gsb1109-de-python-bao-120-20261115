@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 ## Unreleased
 
 - Preserve explicit empty-string arguments in message helpers and TCP clients while keeping omitted values argument-free.
+- Add offline bundle timeline (`pythonosc.osc_timeline`) that resolves nested time-tags with parent constraints, keeps packet order at the same instant, marks immediate-only messages as undetermined instead of using today, and isolates malformed elements rather than dropping them silently.
 
 ## [1.10.2]
 
