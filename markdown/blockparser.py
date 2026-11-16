@@ -32,6 +32,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as etree
 from typing import TYPE_CHECKING, Iterable, Any
 from . import util
+from .sourcetrace import SourceTrace, registry_name
 
 if TYPE_CHECKING:  # pragma: no cover
     from markdown import Markdown
@@ -155,6 +156,37 @@ class BlockParser:
         while blocks:
             for processor in self.blockprocessors:
                 if processor.test(parent, blocks[0]):
-                    if processor.run(parent, blocks) is not False:
+                    if self.md.source_tracking:
+                        snippet = blocks[0]
+                        child_count = len(parent)
+                        before = self.md.serializer(parent)
+                        trace_index = self.md.trace.begin(
+                            SourceTrace.BLOCK,
+                            registry_name(self.blockprocessors, processor),
+                            snippet,
+                        )
+                    else:
+                        child_count = -1
+                        before = None
+                        trace_index = -1
+                    result = processor.run(parent, blocks)
+                    if result is not False:
+                        if self.md.source_tracking:
+                            output = ''.join(
+                                self.md.serializer(child)
+                                for child in list(parent)[child_count:]
+                            )
+                            if not output and self.md.serializer(parent) != before:
+                                # The rule extended an existing sibling (for example
+                                # another code block) rather than adding a new one.
+                                output = (
+                                    self.md.serializer(parent[-1])
+                                    if len(parent)
+                                    else self.md.serializer(parent)
+                                )
+                            self.md.trace.finish(trace_index, output)
                         # run returns True or None
                         break
+                    if self.md.source_tracking:
+                        # The rule declined the block, so it is not a source.
+                        self.md.trace.discard(trace_index)

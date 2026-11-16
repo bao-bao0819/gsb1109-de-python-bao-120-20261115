@@ -32,6 +32,7 @@ from .inlinepatterns import build_inlinepatterns, DelimiterProcessor
 from .postprocessors import build_postprocessors
 from .extensions import Extension
 from .serializers import to_html_string, to_xhtml_string
+from .sourcetrace import SourceTrace, registry_name
 from .util import BLOCK_LEVEL_ELEMENTS
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -71,6 +72,8 @@ class Markdown:
         Markdown.inlinePatterns (util.Registry): A collection of [`inlinepatterns`][markdown.inlinepatterns].
         Markdown.treeprocessors (util.Registry): A collection of [`treeprocessors`][markdown.treeprocessors].
         Markdown.postprocessors (util.Registry): A collection of [`postprocessors`][markdown.postprocessors].
+        Markdown.source_tracking (bool): Whether rule-source tracking is enabled for the instance.
+        Markdown.trace (sourcetrace.SourceTrace): The records collected when `source_tracking` is `True`.
 
     """
 
@@ -103,11 +106,17 @@ class Markdown:
                 * `xhtml`: Outputs XHTML style tags. Default.
                 * `html`: Outputs HTML style tags.
             tab_length (int): Length of tabs in the source. Default: `4`
+            source_tracking (bool): When `True`, collect a
+                [`SourceTrace`][markdown.sourcetrace.SourceTrace] of the rules which
+                consume or replace source fragments during conversion, accessible as
+                `self.trace`. Default: `False`. Tracking never alters the output.
 
         """
 
         self.last_run: float = 0.0
         self.tab_length: int = kwargs.get('tab_length', 4)
+        self.source_tracking: bool = bool(kwargs.get('source_tracking', False))
+        self.trace: SourceTrace = SourceTrace()
 
         self.ESCAPED_CHARS: list[str] = [
             '\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '>', '#', '+', '-', '.', '!'
@@ -271,6 +280,7 @@ class Markdown:
         """
         self.htmlStash.reset()
         self.references.clear()
+        self.trace.reset()
 
         if self.delimiters is not None:
             self.delimiters.reset()
@@ -364,16 +374,35 @@ class Markdown:
         # Split into lines and run the line preprocessors.
         self.lines = source.split("\n")
         for prep in self.preprocessors:
+            before = self.lines
             self.lines = prep.run(self.lines)
+            if self.source_tracking and self.lines != before:
+                self.trace.add(
+                    SourceTrace.PREPROCESS,
+                    registry_name(self.preprocessors, prep),
+                    '\n'.join(before),
+                    '\n'.join(self.lines),
+                )
 
         # Parse the high-level elements.
         root = self.parser.parseDocument(self.lines).getroot()
 
         # Run the tree-processors
         for treeprocessor in self.treeprocessors:
+            if self.source_tracking:
+                before = self.serializer(root)
             newRoot = treeprocessor.run(root)
             if newRoot is not None:
                 root = newRoot
+            if self.source_tracking:
+                after = self.serializer(root)
+                if after != before:
+                    self.trace.add(
+                        SourceTrace.TREE,
+                        registry_name(self.treeprocessors, treeprocessor),
+                        before,
+                        after,
+                    )
 
         # Serialize _properly_.  Strip top-level tags.
         output = self.serializer(root)
@@ -394,7 +423,15 @@ class Markdown:
 
         # Run the text post-processors
         for pp in self.postprocessors:
+            before = output
             output = pp.run(output)
+            if self.source_tracking and output != before:
+                self.trace.add(
+                    SourceTrace.POSTPROCESS,
+                    registry_name(self.postprocessors, pp),
+                    before,
+                    output,
+                )
 
         return output.strip()
 

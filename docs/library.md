@@ -352,3 +352,39 @@ The [`convertFile`][markdown.Markdown.convertFile] method accepts the same
 arguments as the `markdown.markdownFromFile` function. There is little
 benefit in accessing this method directly and it remains for backward
 compatability puposes only.
+
+## Tracking Rule Sources
+
+When several extensions process the same markup it can be hard to tell which
+rule consumed or replaced a given fragment. Pass `source_tracking=True` to
+collect a [`SourceTrace`][markdown.sourcetrace.SourceTrace] of every rule that
+actually fires during a conversion, available on the instance as `md.trace`.
+
+```python
+md = markdown.Markdown(source_tracking=True)
+md.convert('A [**bold** link](http://example.com).')
+for record in md.trace.records:
+    print(record.stage, record.rule, repr(record.snippet), '->', repr(record.output))
+```
+
+Each [`TraceRecord`][markdown.sourcetrace.TraceRecord] names the pipeline
+`stage`, the registered `rule`, the source `snippet` the rule received and the
+`output` it produced. Rules which never fire, or which match but reject a span,
+are absent: a rule that did not run is never reported as a source. Tracking is
+observational only, so the converted HTML is identical with or without it.
+
+When a rule rewrites content while nested inside another rule, the inner record
+stores the enclosing fragment as `original` and links to it through `parent`.
+[`SourceTrace.lineage`][markdown.sourcetrace.SourceTrace.lineage] walks those
+links back to the outermost fragment, recovering text that has been through
+several nested rewrites.
+
+```python
+strong, = md.trace.for_rule('em_strong')
+print(md.trace.lineage(strong))
+# ['[**bold** link](http://example.com)', '**bold**']
+```
+
+The records accumulate across calls to `convert` on the same instance and are
+cleared by [`reset`][markdown.Markdown.reset]. See
+[`markdown.sourcetrace`][markdown.sourcetrace] for the full API.

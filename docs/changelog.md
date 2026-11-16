@@ -14,6 +14,15 @@ See the [Contributing Guide](contributing.md) for details.
 
 ## Unreleased
 
+### Added
+
+* Add an optional `source_tracking` keyword to `Markdown` (and the `markdown`
+  function). When enabled, the new `Markdown.trace` (`SourceTrace`) records each
+  rule that consumes or replaces a source fragment during conversion, including
+  the rule name, pipeline stage, source snippet, produced output and the
+  enclosing fragment for nested rewrites. Rules which do not fire are never
+  recorded, and the converted output is unchanged.
+
 ### Fixed
 
 * The `toc` extension no longer raises `TypeError` for a heading whose `id`

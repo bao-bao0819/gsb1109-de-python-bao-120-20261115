@@ -100,6 +100,7 @@ nav:
       - <code>markdown.&#8203;util</code>: reference/markdown.util.md
       - <code>markdown.&#8203;htmlparser</code>: reference/markdown.htmlparser.md
       - <code>markdown.&#8203;test_tools</code>: reference/markdown.test_tools.md
+      - <code>markdown.&#8203;sourcetrace</code>: reference/markdown.sourcetrace.md
       - <code>markdown.&#8203;extensions</code>: reference/markdown.extensions.md
       - <code>markdown.&#8203;extensions.&#8203;abbr</code>: reference/markdown.extensions.abbr.md
       - <code>markdown.&#8203;extensions.&#8203;admonition</code>: reference/markdown.extensions.admonition.md

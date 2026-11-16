@@ -31,6 +31,7 @@ import xml.etree.ElementTree as etree
 from typing import TYPE_CHECKING, Any
 from . import util
 from . import inlinepatterns
+from .sourcetrace import SourceTrace, registry_name
 
 if TYPE_CHECKING:  # pragma: no cover
     from markdown import Markdown
@@ -116,6 +117,41 @@ class InlineProcessor(Treeprocessor):
         placeholder, id = self.__makePlaceholder(type)
         self.stashed_nodes[id] = node
         return placeholder
+
+    def __trace_node_output(self, node: etree.Element | str) -> str:
+        """ Render the output a pattern produced, for the source trace. """
+        if isinstance(node, str):
+            rendered = node
+        else:
+            rendered = self.md.serializer(node)
+        return self.__resolve_placeholders(rendered)
+
+    def __resolve_placeholders(self, text: str) -> str:
+        """ Expand inline and raw-HTML placeholders into their stored content. """
+        def inline_sub(m: re.Match[str]) -> str:
+            value = self.stashed_nodes.get(m.group(1))
+            if value is None:
+                return m.group(0)
+            if isinstance(value, str):
+                return self.__resolve_placeholders(value)
+            return self.__resolve_placeholders(self.md.serializer(value))
+
+        def html_sub(m: re.Match[str]) -> str:
+            key = int(m.group(1))
+            if key >= self.md.htmlStash.html_counter:
+                return m.group(0)
+            return str(self.md.htmlStash.rawHtmlBlocks[key])
+
+        def escape_sub(m: re.Match[str]) -> str:
+            return chr(int(m.group(1)))
+
+        previous = None
+        while previous != text:
+            previous = text
+            text = util.INLINE_PLACEHOLDER_RE.sub(inline_sub, text)
+            text = util.HTML_PLACEHOLDER_RE.sub(html_sub, text)
+            text = UnescapeTreeprocessor.RE.sub(escape_sub, text)
+        return text
 
     def __handleInline(self, data: str, patternIndex: int = 0) -> str:
         """
@@ -301,8 +337,23 @@ class InlineProcessor(Treeprocessor):
             start = match.start(0)
             end = match.end(0)
 
+        if new_style:
+            snippet = data[start:end]
+        else:  # pragma: no cover
+            snippet = data[startIndex + start:startIndex + end]
+
         if node is None:
+            # The rule matched but rejected the span, so it did not consume or
+            # replace any content and must not be recorded as a source.
             return data, True, end
+
+        trace_index = -1
+        if self.md.source_tracking:
+            trace_index = self.md.trace.begin(
+                SourceTrace.INLINE,
+                registry_name(self.inlinePatterns, pattern),
+                snippet,
+            )
 
         if not isinstance(node, str):
             if not isinstance(node.text, util.AtomicString):
@@ -321,6 +372,9 @@ class InlineProcessor(Treeprocessor):
                             )
 
         placeholder = self.__stashNode(node, pattern.type())
+
+        if self.md.source_tracking:
+            self.md.trace.finish(trace_index, self.__trace_node_output(node))
 
         if new_style:
             # Return the index just past the inserted placeholder so the
