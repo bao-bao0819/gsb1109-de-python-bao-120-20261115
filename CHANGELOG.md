@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 ## Unreleased
 
 - Preserve explicit empty-string arguments in message helpers and TCP clients while keeping omitted values argument-free.
+- Parse OSC address patterns (braces, character classes, `?` and `*`) per the OSC 1.0 specification, expose per-sample rule matches with the real address, rule pattern and argument types, and report malformed patterns as invalid rules instead of collecting them as ordinary addresses.
 
 ## [1.10.2]
 

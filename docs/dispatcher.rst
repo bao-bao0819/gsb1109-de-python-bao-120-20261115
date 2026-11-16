@@ -89,6 +89,50 @@ which OSC arguments the address accepts.
 
 The ``Dispatcher.map`` method returns a ``Handler`` object, which can be used to remove the mapping from the dispatcher.
 
+Address patterns
+------------------
+
+Patterns follow the OSC 1.0 address pattern language, applied to whole
+segment-separated addresses:
+
+* ``?`` matches one character other than ``/``.
+* ``*`` matches zero or more characters other than ``/``.
+* ``[abc]`` matches one character of the class, ``[a-z]`` matches a range and
+  ``[!abc]`` negates the class.
+* ``{foo,bar}`` matches one of the comma separated alternatives; each
+  alternative is a literal candidate string, so pattern characters inside it
+  are matched literally.
+
+Mapped values that contain pattern syntax are parsed as rules either way. A
+malformed rule raises :class:`pythonosc.osc_pattern.InvalidAddressPattern`,
+which reports the offending rule text and the position of the syntax error.
+The same applies when such a string is looked up: it is reported instead of
+being collected as an ordinary address.
+
+
+Matching rules for a sample
+-----------------------------
+
+``Dispatcher.matching_rules`` reports which subscription rules a sample hits.
+It returns one ``RuleMatch`` per hit rule with the sample's real address, the
+mapped rule pattern and the sample's OSC type tags:
+
+.. code-block:: python
+
+    disp.map("/device/{1,2}/gain", on_gain)
+    disp.map("/device/*/gain", log_gain)
+
+    for hit in disp.matching_rules("/device/1/gain", "if"):
+        print(hit.address, hit.pattern, hit.type_tag)
+
+Several handlers mapped to the same rule produce a single fact, so the same
+rule never appears twice for one sample. Pass an iterable of tags or a type
+tag string (with or without the leading comma) as the second argument, or use
+``Dispatcher.matches_for_message`` to take both address and tags from a parsed
+``OscMessage``. When the sample itself is a pattern, ``RuleMatch.pattern``
+keeps the rule as mapped while ``resolved_address`` carries the concrete
+mapped address the sample selected.
+
 
 Unmapping
 -----------

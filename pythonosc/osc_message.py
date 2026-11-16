@@ -20,6 +20,7 @@ class OscMessage(object):
     def __init__(self, dgram: bytes) -> None:
         self._dgram = dgram
         self._parameters = []  # type: List[Any]
+        self._type_tag = ""
         self._parse_datagram()
 
     def __str__(self):
@@ -88,6 +89,7 @@ class OscMessage(object):
                     param_stack[-1].append(val)
             if len(param_stack) != 1:
                 raise ParseError(f"Missing closing bracket in type tag: {type_tag}")
+            self._type_tag = type_tag
             self._parameters = params
         except osc_types.ParseError as pe:
             raise ParseError("Found incorrect datagram, ignoring it", pe)
@@ -116,6 +118,19 @@ class OscMessage(object):
     def params(self) -> List[Any]:
         """Convenience method for list(self) to get the list of parameters."""
         return list(self)
+
+    @property
+    def type_tag(self) -> str:
+        """Returns the type tag string without the leading comma.
+
+        A message without arguments has an empty type tag.
+        """
+        return self._type_tag
+
+    @property
+    def type_tags(self) -> List[str]:
+        """Returns the type tag characters, including array brackets."""
+        return list(self._type_tag)
 
     def __iter__(self) -> Iterator[Any]:
         """Returns an iterator over the parameters of this message."""

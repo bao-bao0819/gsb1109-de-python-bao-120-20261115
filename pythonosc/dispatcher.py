@@ -4,11 +4,18 @@ import asyncio
 import collections
 import inspect
 import logging
-import re
 import time
+from dataclasses import dataclass
 from pythonosc import osc_packet
+from pythonosc.osc_pattern import (
+    AddressPattern,
+    InvalidAddressPattern,
+    compile_address_pattern,
+    is_address_pattern,
+)
 from typing import (
     overload,
+    Iterable,
     List,
     Union,
     Any,
@@ -21,6 +28,52 @@ from typing import (
 )
 from pythonosc.osc_message import OscMessage
 from pythonosc.osc_message_builder import ArgValue
+
+
+def _normalise_argument_types(
+    argument_types: Union[str, Iterable[str], None],
+) -> Tuple[str, ...]:
+    """Convert a type tag string or an iterable of tags to a tuple."""
+    if argument_types is None:
+        return ()
+    if isinstance(argument_types, str):
+        return tuple(
+            argument_types[1:] if argument_types.startswith(",") else argument_types
+        )
+    return tuple(argument_types)
+
+
+@dataclass(frozen=True)
+class RuleMatch(object):
+    """A subscription rule hit by one OSC address sample.
+
+    Attributes:
+        address: The address (or address pattern) of the sample exactly as it
+            was supplied to the dispatcher.
+        pattern: The mapped rule pattern that matched, exactly as registered.
+        argument_types: The OSC type tags of the sample, one entry per
+            argument.  Empty when the sample has no arguments.
+        resolved_address: The concrete mapped address when ``address`` itself
+            contains pattern syntax and the rule is a concrete address.
+    """
+
+    address: str
+    pattern: str
+    argument_types: Tuple[str, ...] = ()
+    resolved_address: Optional[str] = None
+
+    @property
+    def type_tag(self) -> str:
+        """The sample's type tag string, e.g. ``"ifs"``."""
+        return "".join(self.argument_types)
+
+    @property
+    def type_tags(self) -> Tuple[str, ...]:
+        """Alias for :attr:`argument_types`."""
+        return self.argument_types
+
+
+AddressMatch = RuleMatch
 
 
 class Handler(object):
@@ -179,9 +232,11 @@ class Dispatcher(object):
             The handler object that will be invoked should the given address match
 
         """
-        # TODO: Check the spec:
-        # http://opensoundcontrol.org/spec-1_0
-        # regarding multiple mappings
+        # Validate the rule before storing it.  A malformed pattern must be
+        # reported as the rule it is; it must never fall through to literal
+        # address matching and keep collecting samples.
+        if is_address_pattern(address):
+            compile_address_pattern(address)
         handlerobj = Handler(handler, list(args), needs_reply_address)
         self._map[address].append(handlerobj)
         return handlerobj
@@ -231,6 +286,97 @@ class Dispatcher(object):
                     f"Address '{address}' doesn't have handler '{handler}' mapped to it"
                 ) from e
 
+    def _matching_rules(
+        self, address: str, argument_types: Union[str, Iterable[str], None] = None
+    ) -> List[RuleMatch]:
+        """Return one :class:`RuleMatch` per matched rule, in registration order.
+
+        ``address`` may be a concrete address or an address pattern.  A
+        concrete address matches rules whose pattern accepts it; a pattern
+        sample matches concrete rule addresses it selects as well as rules
+        whose pattern is identical.  Each registered rule (and thus each
+        handler inside it) contributes at most one match, so several handlers
+        mapped to the same rule never duplicate the fact.
+        """
+        types = _normalise_argument_types(argument_types)
+        sample_is_pattern = is_address_pattern(address)
+        sample_pattern = compile_address_pattern(address) if sample_is_pattern else None
+
+        matches: List[RuleMatch] = []
+        for rule, _handlers in self._map.items():
+            rule_is_pattern = is_address_pattern(rule)
+            resolved_address: Optional[str] = None
+            if rule_is_pattern:
+                if rule == "/*":
+                    # Compatibility: a mapped "/*" has always matched every
+                    # address, including addresses with several segments.
+                    hit = address.startswith("/")
+                else:
+                    rule_pattern = compile_address_pattern(rule)
+                    if sample_is_pattern:
+                        hit = rule == address
+                    else:
+                        hit = rule_pattern.matches(address)
+            else:
+                if sample_is_pattern:
+                    hit = sample_pattern is not None and sample_pattern.matches(rule)
+                    resolved_address = rule if hit else None
+                else:
+                    hit = rule == address
+            if hit:
+                matches.append(
+                    RuleMatch(
+                        address=address,
+                        pattern=rule,
+                        argument_types=types,
+                        resolved_address=resolved_address,
+                    )
+                )
+        return matches
+
+    def matching_rules(
+        self, address: str, argument_types: Union[str, Iterable[str], None] = None
+    ) -> List[RuleMatch]:
+        """Return the subscription rules hit by one sample.
+
+        Args:
+            address: The sample's OSC address exactly as received.  It may
+                itself be a pattern, in which case concrete rules it selects
+                are reported through ``resolved_address``.
+            argument_types: The sample's OSC type tags, either as a type tag
+                string (with or without the leading ``","``) or an iterable of
+                single tags.
+
+        Returns:
+            One :class:`RuleMatch` per hit rule.  Rules are not duplicated
+            when several handlers are mapped to them.
+
+        Raises:
+            InvalidAddressPattern: if the address is a malformed pattern.  The
+                exception carries the pattern text so the faulty rule can be
+                reported instead of being collected as a literal address.
+        """
+        return self._matching_rules(address, argument_types)
+
+    def match_details(
+        self, address: str, argument_types: Union[str, Iterable[str], None] = None
+    ) -> List[RuleMatch]:
+        """Alias for :meth:`matching_rules`."""
+        return self._matching_rules(address, argument_types)
+
+    def matches_for_message(self, message: OscMessage) -> List[RuleMatch]:
+        """Return the rules hit by a parsed message.
+
+        Unlike :meth:`matching_rules` the address and type tags are taken from
+        the message itself, so an incoming packet can be inspected without
+        re-encoding it.
+
+        Raises:
+            InvalidAddressPattern: if the message address is a malformed
+                pattern.  The exception names the offending pattern.
+        """
+        return self._matching_rules(message.address, message.type_tags)
+
     def handlers_for_address(
         self, address_pattern: str
     ) -> Generator[Handler, None, None]:
@@ -241,62 +387,36 @@ class Dispatcher(object):
 
         Returns:
             Generator yielding Handlers matching address_pattern
+
+        Raises:
+            InvalidAddressPattern: if address_pattern is a malformed pattern.
+                The exception names the offending pattern.
         """
-        # Convert OSC Address Pattern to a Python regular expression.
         # Spec: https://opensoundcontrol.stanford.edu/spec-1_0.html#osc-address-patterns
-
-        pattern = "^"
-        i = 0
-        while i < len(address_pattern):
-            c = address_pattern[i]
-            if c == "*":
-                pattern += "[^/]*"
-            elif c == "?":
-                pattern += "[^/]"
-            elif c == "[":
-                pattern += "["
-                i += 1
-                if i < len(address_pattern) and address_pattern[i] == "!":
-                    pattern += "^"
-                    i += 1
-                while i < len(address_pattern) and address_pattern[i] != "]":
-                    if address_pattern[i] in r"\^$.|()+*?":
-                        pattern += "\\"
-                    pattern += address_pattern[i]
-                    i += 1
-                pattern += "]"
-            elif c == "{":
-                pattern += "("
-                i += 1
-                while i < len(address_pattern) and address_pattern[i] != "}":
-                    char = address_pattern[i]
-                    if char == ",":
-                        pattern += "|"
-                    elif char in r"\^$.|()[]+*?":
-                        pattern += "\\" + char
-                    else:
-                        pattern += char
-                    i += 1
-                pattern += ")"
-            elif c in r"\^$.|()[]+?":
-                pattern += "\\" + c
-            else:
-                pattern += c
-            i += 1
-        pattern += "$"
-
-        try:
-            patterncompiled = re.compile(pattern)
-        except re.error:
-            # If the pattern is invalid, it won't match anything.
-            return
+        sample_is_pattern = is_address_pattern(address_pattern)
+        compiled_sample: Optional[AddressPattern] = None
+        if sample_is_pattern:
+            compiled_sample = compile_address_pattern(address_pattern)
 
         matched = False
-        for addr, handlers in self._map.items():
-            if patterncompiled.match(addr) or (
-                "*" in addr
-                and re.match(addr.replace("*", ".*?") + "$", address_pattern)
-            ):
+        for rule, handlers in self._map.items():
+            if is_address_pattern(rule):
+                if rule == "/*":
+                    # Compatibility: a mapped "/*" has always matched every
+                    # address, including addresses with several segments.
+                    hit = address_pattern.startswith("/")
+                else:
+                    rule_pattern = compile_address_pattern(rule)
+                    if sample_is_pattern:
+                        hit = rule == address_pattern
+                    else:
+                        hit = rule_pattern.matches(address_pattern)
+            else:
+                if sample_is_pattern:
+                    hit = compiled_sample is not None and compiled_sample.matches(rule)
+                else:
+                    hit = rule == address_pattern
+            if hit:
                 yield from handlers
                 matched = True
 
@@ -322,7 +442,14 @@ class Dispatcher(object):
             packet = osc_packet.OscPacket(data)
             for timed_msg in packet.messages:
                 now = time.time()
-                handlers = self.handlers_for_address(timed_msg.message.address)
+                try:
+                    handlers = self.handlers_for_address(timed_msg.message.address)
+                except InvalidAddressPattern as invalid:
+                    # A pattern-shaped address from the network cannot be
+                    # collected as if it were a plain address; report the
+                    # offending text and skip this message.
+                    logging.warning("%s", invalid)
+                    continue
                 if not handlers:
                     continue
                 # If the message is to be handled later, then so be it.
@@ -359,7 +486,11 @@ class Dispatcher(object):
             packet = osc_packet.OscPacket(data)
             for timed_msg in packet.messages:
                 now = time.time()
-                handlers = self.handlers_for_address(timed_msg.message.address)
+                try:
+                    handlers = self.handlers_for_address(timed_msg.message.address)
+                except InvalidAddressPattern as invalid:
+                    logging.warning("%s", invalid)
+                    continue
                 if not handlers:
                     continue
                 # If the message is to be handled later, then so be it.

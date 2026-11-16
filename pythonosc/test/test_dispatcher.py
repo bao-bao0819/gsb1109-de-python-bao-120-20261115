@@ -1,6 +1,151 @@
 import unittest
 
-from pythonosc.dispatcher import Dispatcher, Handler
+from pythonosc.dispatcher import Dispatcher, Handler, RuleMatch
+from pythonosc.osc_message_builder import OscMessageBuilder
+from pythonosc.osc_pattern import InvalidAddressPattern, compile_address_pattern
+
+
+class TestAddressPattern(unittest.TestCase):
+    def assertMatches(self, pattern, accepted, rejected):
+        compiled = compile_address_pattern(pattern)
+        for address in accepted:
+            with self.subTest(pattern=pattern, address=address):
+                self.assertTrue(compiled.matches(address))
+        for address in rejected:
+            with self.subTest(pattern=pattern, address=address):
+                self.assertFalse(compiled.matches(address))
+
+    def test_brace_alternatives(self):
+        self.assertMatches(
+            "/synth/{osc,sawtooth}/{1,2}",
+            ["/synth/osc/1", "/synth/sawtooth/2"],
+            ["/synth/pulse/1", "/synth/osc/3", "/synth/osc"],
+        )
+
+    def test_character_classes_and_negation(self):
+        self.assertMatches(
+            "/track/[0-9][!0-4]",
+            ["/track/15", "/track/39", "/track/1a"],
+            ["/track/11", "/track/14"],
+        )
+
+    def test_character_class_range(self):
+        self.assertMatches("/track/[a-c]", ["/track/a", "/track/c"], ["/track/d"])
+
+    def test_wildcards_do_not_cross_slash(self):
+        self.assertMatches("/foo/*", ["/foo/bar"], ["/foo/bar/baz"])
+        self.assertMatches("/foo/?", ["/foo/a"], ["/foo/ab"])
+
+    def test_brace_candidates_are_literal_strings(self):
+        self.assertMatches(
+            "/a/{b*,c?}",
+            ["/a/b*", "/a/c?"],
+            ["/a/beta", "/a/cd"],
+        )
+
+    def test_character_class_inside_brace_candidate_is_literal(self):
+        self.assertMatches(
+            "/a/{[0-9],x}",
+            ["/a/[0-9]", "/a/x"],
+            ["/a/4"],
+        )
+
+    def test_malformed_patterns_name_the_rule(self):
+        for pattern in (
+            "/a/{b,c",
+            "/a/{}",
+            "/a/{,b}",
+            "/a/[0-9",
+            "/a/[]",
+            "/a/[z-a]",
+            "/a/b}",
+            "/a/,b",
+            "a/b",
+        ):
+            with self.subTest(pattern=pattern):
+                with self.assertRaises(InvalidAddressPattern) as raised:
+                    compile_address_pattern(pattern)
+                self.assertEqual(raised.exception.pattern, pattern)
+
+
+class TestRuleMatches(unittest.TestCase):
+    def setUp(self):
+        self.dispatcher = Dispatcher()
+
+    def test_one_fact_per_rule_even_with_several_handlers(self):
+        self.dispatcher.map("/device/*/gain", "first")
+        self.dispatcher.map("/device/*/gain", "second")
+
+        matches = self.dispatcher.matching_rules("/device/1/gain", "if")
+
+        self.assertEqual(
+            [
+                RuleMatch(
+                    address="/device/1/gain",
+                    pattern="/device/*/gain",
+                    argument_types=("i", "f"),
+                )
+            ],
+            matches,
+        )
+
+    def test_reports_every_hit_rule(self):
+        self.dispatcher.map("/device/*/gain", "wildcard")
+        self.dispatcher.map("/device/1/gain", "exact")
+
+        matches = self.dispatcher.matching_rules("/device/1/gain", ",f")
+
+        self.assertEqual(
+            [
+                RuleMatch("/device/1/gain", "/device/*/gain", ("f",)),
+                RuleMatch("/device/1/gain", "/device/1/gain", ("f",)),
+            ],
+            matches,
+        )
+
+    def test_pattern_sample_reports_resolved_address(self):
+        self.dispatcher.map("/device/1/gain", "exact")
+
+        matches = self.dispatcher.matching_rules("/device/?/gain")
+
+        self.assertEqual(
+            [RuleMatch("/device/?/gain", "/device/1/gain", (), "/device/1/gain")],
+            matches,
+        )
+
+    def test_message_matches_use_parsed_type_tags(self):
+        self.dispatcher.map("/device/{1,2}/gain", "gain")
+        builder = OscMessageBuilder("/device/2/gain")
+        builder.add_arg(3)
+        builder.add_arg("db")
+
+        matches = self.dispatcher.matches_for_message(builder.build())
+
+        self.assertEqual(["i", "s"], list(matches[0].argument_types))
+        self.assertEqual("is", matches[0].type_tag)
+
+    def test_malformed_rule_is_rejected_at_map_time(self):
+        with self.assertRaises(InvalidAddressPattern) as raised:
+            self.dispatcher.map("/device/{1,2", "gain")
+        self.assertEqual("/device/{1,2", raised.exception.pattern)
+        self.assertEqual([], list(self.dispatcher.handlers_for_address("/device/1")))
+
+    def test_malformed_sample_names_the_sample(self):
+        self.dispatcher.map("/device/*", "gain")
+        with self.assertRaises(InvalidAddressPattern) as raised:
+            list(self.dispatcher.handlers_for_address("/device/[0-9"))
+        self.assertEqual("/device/[0-9", raised.exception.pattern)
+
+    def test_packet_with_malformed_address_is_skipped(self):
+        received = []
+        self.dispatcher.map("/*", lambda address, *args: received.append(address))
+
+        result = self.dispatcher.call_handlers_for_packet(
+            b"/device/[0-9\x00\x00,s\x00\x00x\x00\x00\x00", ("127.0.0.1", 1234)
+        )
+
+        self.assertEqual([], result)
+        self.assertEqual([], received)
 
 
 class TestDispatcher(unittest.IsolatedAsyncioTestCase):
