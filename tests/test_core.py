@@ -487,6 +487,23 @@ class TestGroup(unittest.TestCase):
         del m.rsp_k21_query_response
         self.assertFalse(g in m.children)
 
+    def test_replace_repeated_child_keeps_group_order(self):
+        # tolerant groups serialize children by insertion order; replacing an occurrence
+        # must keep it in place instead of moving it to the end
+        message = (
+            'MSH|^~\\&|GHH|||GHH|||ADT^A01^ADT_A01|123|P|2.5\r'
+            'NK1|1|A\r'
+            'NK1|2|B\r'
+        )
+        m = parse_message(message, validation_level=VALIDATION_LEVEL.TOLERANT, find_groups=False)
+        second = m.nk1[1]
+
+        m.nk1[0] = 'NK1|9|Z'
+
+        self.assertEqual([c.name for c in m.children.list], ['MSH', 'NK1', 'NK1'])
+        self.assertIs(m.nk1[1], second)
+        self.assertEqual(m.to_er7().split('\r')[1:3], ['NK1|9|Z', 'NK1|2|B'])
+
     def test_create_supported_version_group(self):
         Group(version='2.5')
 
@@ -823,6 +840,35 @@ class TestSegment(unittest.TestCase):
         self.assertIn(qpd, m.children)
         del m.qpd
         self.assertNotIn(qpd, m.children)
+
+    def test_replace_repeated_field_keeps_position_and_identity(self):
+        # the confirmed occurrence must be replaced in place; equal-valued repetitions stay untouched
+        segment = parse_segment('PID|1||111^A~111^B~333^C')
+        repetitions = segment.pid_3.list
+        first, third = repetitions[0], repetitions[2]
+
+        segment.pid_3[1] = '999^Z'
+
+        self.assertEqual([f.to_er7() for f in segment.pid_3], ['111^A', '999^Z', '333^C'])
+        # the other occurrences are the very same objects, not same-valued substitutes
+        self.assertIs(segment.pid_3[0], first)
+        self.assertIs(segment.pid_3[2], third)
+        self.assertEqual(segment.to_er7(), 'PID|1||111^A~999^Z~333^C')
+
+    def test_replace_repeated_field_with_equal_values(self):
+        # replacing an occurrence must not silently target another one holding the same value
+        segment = parse_segment('PID|1||111~111~333')
+        untouched = segment.pid_3.list[1:]
+
+        segment.pid_3[0] = '999'
+
+        self.assertEqual([f.to_er7() for f in segment.pid_3], ['999', '111', '333'])
+        self.assertEqual(segment.pid_3.list[1:], untouched)
+
+    def test_replace_field_keeps_children_order(self):
+        segment = parse_segment('PID|1||ID3||NAME5|||||||PHONE13')
+        segment.pid_1 = '9'
+        self.assertEqual([c.name for c in segment.children.list], ['PID_1', 'PID_3', 'PID_5', 'PID_12'])
 
     def test_assign_value(self):
         segment_str = 'PID|1||123-456-789^^^HOSPITAL^MR||SURNAME^NAME^A|||M|||1111 SOMEWHERE STREET^^SOMEWHERE^^^USA||555-555-2004~444-333-222|||M\r'

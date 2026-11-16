@@ -265,6 +265,19 @@ class ElementList(MutableSequence):
             except KeyError:
                 self.indexes[child.name] = [child]
             self.list.insert(index, child)
+        elif child in self.list:
+            # Assigning the parent inside _can_add_child already mounted the child at
+            # the end of both lists. Move it to the requested position so that the
+            # repetitions keep their order and the confirmed occurrence (not another
+            # one holding the same value) is replaced. Matching is by identity only.
+            self.list.remove(child)
+            self.list.insert(index, child)
+            name_index = self.indexes[child.name]
+            name_index.remove(child)
+            if by_name_index == -1:
+                name_index.append(child)
+            else:
+                name_index.insert(by_name_index, child)
 
     def append(self, child):
         """
