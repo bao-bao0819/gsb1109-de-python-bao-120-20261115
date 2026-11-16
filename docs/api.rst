@@ -31,6 +31,40 @@ python-hl7 API
 
 .. autofunction:: hl7.parse_datetime
 
+.. autofunction:: hl7.parse_datetime_range
+
+.. autofunction:: hl7.filter_datetime_ranges
+
+.. autofunction:: hl7.sort_datetime_ranges
+
+.. autofunction:: hl7.describe_datetime_ranges
+
+.. autofunction:: hl7.datetime_range_report
+
+.. autofunction:: hl7.parse_collection_time
+
+.. autofunction:: hl7.filter_collection_times
+
+.. autofunction:: hl7.filter_by_day
+
+.. autofunction:: hl7.sort_collection_times
+
+.. autofunction:: hl7.describe_collection_times
+
+.. autofunction:: hl7.collection_time_report
+
+.. autoclass:: hl7.DateTimeRange
+   :members: raw, original, declaration, precision, precision_digits,
+             precision_name, precision_code, precision_level, precision_length,
+             base_precision, fractional_precision, range, range_start,
+             range_end, comparable_range, granularity, resolution, sort_key,
+             has_offset, tzinfo, utc_offset, offset, overlaps, contains, to_dict,
+             get, describe
+
+.. autoclass:: hl7.DateTimeFilterResult
+   :members: contained, overlapping, outside, matched, intersecting,
+             included, excluded, to_dict
+
 
 Data Types
 ----------

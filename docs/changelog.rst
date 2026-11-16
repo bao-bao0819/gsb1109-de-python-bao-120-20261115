@@ -16,6 +16,13 @@ Changelog
 * Switched formatting and linting from black/isort and flake8 to ``ruff``.
 * Fixed timezone formatting when ``parse_datetime`` created ``_UTCOffset`` with a
   float value.
+* Added precision-preserving DTM parsing with :py:func:`hl7.parse_datetime_range`
+  and :py:func:`hl7.filter_datetime_ranges`. Partial declarations now retain
+  their original text and resolve to a half-open comparable range instead of
+  being treated as a midnight instant; values without an offset can use a
+  supplied source timezone.
+  :py:func:`hl7.datetime_range_report` returns the original declarations next to
+  the contained, overlapping and outside groups.
 * Use `socket.sendall` to flush the MLLP buffer. `python-hl7#41 <https://github.com/johnpaulett/python-hl7/issues/41>`_.
  Thanks `Feenes <https://github.com/feenes>`_!`
 
