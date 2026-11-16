@@ -79,3 +79,26 @@ generator = mymodule.PersistentSequenceGenerator()
 client = smpplib.client.Client('example.com', SOMEPORTNUMBER, sequence_generator=generator)
 ...
 ```
+
+Optional (TLV) parameters
+-------------------------
+
+Vendors may append private TLVs after the mandatory PDU body, and the same
+tag may appear more than once. Every parsed occurrence is exported in wire
+order via `pdu.optional_params`: known parameters carry their decoded `value`
+and `type`, while unknown ones (requires `allow_unknown_opt_params=True`)
+keep their raw bytes:
+
+```python
+for opt in pdu.optional_params:
+    if opt.name is None:
+        print('vendor tag 0x%04x: %r' % (opt.code, opt.raw))
+    else:
+        print(opt.name, opt.type, opt.value)
+```
+
+Re-encoding a parsed PDU replays this list, so correcting one parameter and
+calling `generate()` again leaves every other item (including unknown vendor
+TLVs and repeated tags) unchanged. A TLV whose declared length runs past the
+end of the body marks that message as corrupt by raising
+`smpplib.exceptions.PDUError` instead of misparsing the rest of the body.

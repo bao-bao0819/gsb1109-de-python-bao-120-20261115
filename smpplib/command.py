@@ -95,6 +95,14 @@ class Command(pdu.PDU):
 
         self.allow_unknown_opt_params = allow_unknown_opt_params
 
+        # Optional (TLV) parameters in wire order, as parsed from the
+        # PDU. Unknown (vendor-specific) parameters are kept as raw
+        # bytes so they can be re-encoded unchanged.
+        self.optional_params = []
+        # Last parsed value per known optional field, used to tell
+        # local corrections apart from untouched parsed values.
+        self._parsed_opt_values = {}
+
         self.command = command
         if need_sequence and (kwargs.get('sequence') is None):
             self.sequence = self._next_seq()
@@ -121,30 +129,78 @@ class Command(pdu.PDU):
         for field in self.params_order:
             param = self.params[field]
             if self.field_is_optional(field):
-                if param.type is int:
-                    value = self._generate_int_tlv(field)
-                    if value:
-                        body += value
-                elif param.type is str:
-                    value = self._generate_string_tlv(field)
-                    if value:
-                        body += value
-                elif param.type is ostr:
-                    value = self._generate_ostring_tlv(field)
-                    if value:
-                        body += value
-            else:
-                if param.type is int:
-                    value = self._generate_int(field)
+                continue
+            if param.type is int:
+                value = self._generate_int(field)
+                body += value
+            elif param.type is str:
+                value = self._generate_string(field)
+                body += value
+            elif param.type is ostr:
+                value = self._generate_ostring(field)
+                if value:
                     body += value
-                elif param.type is str:
-                    value = self._generate_string(field)
-                    body += value
-                elif param.type is ostr:
-                    value = self._generate_ostring(field)
-                    if value:
-                        body += value
+
+        body += self._generate_optional_params()
         return body
+
+    def _generate_optional_params(self):
+        """Generate TLVs for the optional parameters.
+
+        Parameters parsed from a received PDU are replayed in their
+        original wire order: known parameters are re-encoded from their
+        current values (so a local correction only affects the corrected
+        item) and unknown vendor parameters are re-emitted from their
+        raw bytes, leaving every other item untouched. Optional
+        parameters that were set but not parsed are appended after.
+        """
+
+        body = consts.EMPTY_STRING
+        seen = set()
+
+        for opt in self.optional_params:
+            if opt.name is None:
+                body += struct.pack('>HH', opt.code, len(opt.raw)) + opt.raw
+                continue
+            seen.add(opt.name)
+            current = getattr(self, opt.name, None)
+            if current is None:
+                continue  # deleted after parsing
+            if current != self._parsed_opt_values.get(opt.name):
+                tlv = self._generate_optional_tlv(opt.name, current)
+            else:
+                tlv = self._generate_optional_tlv(opt.name, opt.value)
+            if tlv:
+                body += tlv
+
+        for field in self.params_order:
+            if field in seen or not self.field_is_optional(field):
+                continue
+            tlv = self._generate_optional_tlv(field)
+            if tlv:
+                body += tlv
+
+        return body
+
+    def _generate_optional_tlv(self, field, value=None):
+        """Generate a TLV for a known optional parameter"""
+
+        if value is None:
+            value = getattr(self, field, None)
+        if value is None:
+            return None
+
+        param = self.params[field]
+        if param.type is int:
+            return self._generate_int_tlv(field, value)
+        elif param.type is str:
+            return self._generate_string_tlv(field, value)
+        elif param.type is ostr:
+            return self._generate_ostring_tlv(field, value)
+        elif param.type is flag:
+            field_code = get_optional_code(field)
+            return struct.pack('>HH', field_code, 0)
+        return None
 
     def _generate_opt_header(self, field):
         """Generate a header for an optional parameter"""
@@ -166,20 +222,25 @@ class Command(pdu.PDU):
 
         field_value = getattr(self, field)
 
+        if isinstance(field_value, bytes):
+            null = consts.NULL_STRING
+        else:
+            null = chr(0)
+
         if hasattr(self.params[field], 'size'):
             size = self.params[field].size
-            value = field_value.ljust(size, chr(0))
+            value = field_value.ljust(size, null)
         elif hasattr(self.params[field], 'max'):
             if len(field_value or '') >= self.params[field].max:
                 field_value = field_value[0:self.params[field].max - 1]
 
             if field_value:
-                value = field_value + chr(0)
+                value = field_value + null
             else:
-                value = chr(0)
+                value = null
 
         setattr(self, field, field_value)
-        return six.b(value)
+        return value if isinstance(value, bytes) else six.b(value)
 
     def _generate_ostring(self, field):
         """Generate octet string value (no null terminator)"""
@@ -190,10 +251,11 @@ class Command(pdu.PDU):
         else:
             return None  # chr(0)
 
-    def _generate_int_tlv(self, field):
+    def _generate_int_tlv(self, field, data=None):
         """Generate integer value"""
         fmt = self._int_pack_format(field)
-        data = getattr(self, field)
+        if data is None:
+            data = getattr(self, field)
         field_code = get_optional_code(field)
         field_length = self.params[field].size
         value = None
@@ -201,34 +263,45 @@ class Command(pdu.PDU):
             value = struct.pack(">HH" + fmt, field_code, field_length, data)
         return value
 
-    def _generate_string_tlv(self, field):
+    def _generate_string_tlv(self, field, field_value=None):
         """Generate string value"""
 
-        field_value = getattr(self, field)
+        if field_value is None:
+            field_value = getattr(self, field)
         field_code = get_optional_code(field)
+
+        if isinstance(field_value, bytes):
+            null = consts.NULL_STRING
+        else:
+            null = chr(0)
 
         if hasattr(self.params[field], 'size'):
             size = self.params[field].size
-            fvalue = field_value.ljust(size, chr(0))
+            fvalue = field_value.ljust(size, null)
+            if not isinstance(fvalue, bytes):
+                fvalue = six.b(fvalue)
             value = struct.pack(">HH", field_code, size) + fvalue
         elif hasattr(self.params[field], 'max'):
             if len(field_value or '') > self.params[field].max:
                 field_value = field_value[0:self.params[field].max - 1]
 
             if field_value:
-                fvalue = field_value + chr(0)
+                fvalue = field_value + null
                 field_length = len(fvalue)
-                value = struct.pack(">HH", field_code, field_length) + fvalue.encode()
+                if not isinstance(fvalue, bytes):
+                    fvalue = fvalue.encode()
+                value = struct.pack(">HH", field_code, field_length) + fvalue
             else:
                 value = None  # chr(0)
         return value
 
-    def _generate_ostring_tlv(self, field):
+    def _generate_ostring_tlv(self, field, field_value=None):
         """Generate octet string value (no null terminator)"""
-        try:
-            field_value = getattr(self, field)
-        except:
-            return None
+        if field_value is None:
+            try:
+                field_value = getattr(self, field)
+            except AttributeError:
+                return None
         field_code = get_optional_code(field)
 
         value = None
@@ -300,6 +373,9 @@ class Command(pdu.PDU):
         pos = 0
         dlen = len(data)
 
+        self.optional_params = []
+        self._parsed_opt_values = {}
+
         for field in self.params_order:
             param = self.params[field]
             if pos == dlen or self.field_is_optional(field):
@@ -321,30 +397,65 @@ class Command(pdu.PDU):
             * type (2 bytes)
             * length (2 bytes)
             * value (variable, <length> bytes)
+
+        Every occurrence is appended to `self.optional_params` in wire
+        order, so repeated tags are preserved. Known parameters are
+        decoded according to their declared type; unknown (vendor)
+        parameters keep their raw value bytes when
+        `allow_unknown_opt_params` is enabled. A declared length that
+        runs past the end of the body marks this PDU as corrupt instead
+        of letting the parser treat the remaining body as more TLVs.
         """
         dlen = len(data)
         pos = 0
 
+        self.optional_params = []
+        self._parsed_opt_values = {}
+
         while pos < dlen:
+            if dlen - pos < 4:
+                raise exceptions.PDUError(
+                    'Corrupt PDU: truncated optional parameter header '
+                    'at offset %d' % pos)
             type_code, pos = unpack_short(data, pos)
             length, pos = unpack_short(data, pos)
 
+            if length > dlen - pos:
+                raise exceptions.PDUError(
+                    'Corrupt PDU: optional parameter 0x%04x declares '
+                    '%d bytes with only %d left in the body' % (
+                        type_code, length, dlen - pos))
+
             try:
                 field = get_optional_name(type_code)
-            except exceptions.UnknownCommandError as e:
-                if self.allow_unknown_opt_params:
-                    logger.warning("Unknown optional parameter type 0x%x, skipping", type_code)
-                    pos += length
-                    continue
-                raise
+            except exceptions.UnknownCommandError:
+                if not self.allow_unknown_opt_params:
+                    raise
+                logger.warning("Unknown optional parameter type 0x%x, "
+                               "keeping raw bytes", type_code)
+                raw = data[pos:pos + length]
+                self.optional_params.append(
+                    OptionalParam(type_code, value=raw, raw=raw))
+                pos += length
+                continue
 
             param = self.params[field]
+            value_pos = pos
             if param.type is int:
                 data, pos = self._parse_int(field, data, pos)
             elif param.type is str:
                 data, pos = self._parse_string(field, data, pos, length)
             elif param.type is ostr:
                 data, pos = self._parse_ostring(field, data, pos, length)
+            elif param.type is flag:
+                setattr(self, field, True)
+                pos += length
+
+            value = getattr(self, field)
+            self._parsed_opt_values[field] = value
+            self.optional_params.append(OptionalParam(
+                type_code, name=field, value=value,
+                raw=data[value_pos:value_pos + length], param=param))
 
     def field_exists(self, field):
         """Return True if field exists, False otherwise"""
@@ -362,6 +473,48 @@ class Command(pdu.PDU):
             return False
 
         return False
+
+
+class OptionalParam(object):
+    """A single optional (TLV) parameter occurrence, in wire order.
+
+    Known parameters carry their decoded `value` and their `Param`
+    type; unknown (vendor-specific) parameters have no `name` and keep
+    the raw value bytes so they can be re-encoded unchanged.
+    """
+
+    def __init__(self, code, name=None, value=None, raw=None, param=None):
+        self.code = code
+        self.name = name
+        self.value = value
+        self.raw = raw
+        self.param = param
+
+    @property
+    def type(self):
+        """Parameter type for known params, None for unknown ones"""
+        if self.param is not None:
+            return self.param.type
+        return None
+
+    def __eq__(self, other):
+        if not isinstance(other, OptionalParam):
+            return NotImplemented
+        return (self.code, self.name, self.value) == \
+            (other.code, other.name, other.value)
+
+    def __ne__(self, other):
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
+
+    def __repr__(self):
+        if self.name is not None:
+            return '<OptionalParam %s (0x%04x) = %r>' % (
+                self.name, self.code, self.value)
+        return '<OptionalParam unknown (0x%04x) = %r>' % (
+            self.code, self.raw)
 
 
 class Param(object):
