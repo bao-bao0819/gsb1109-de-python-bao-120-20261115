@@ -5,11 +5,14 @@ import collections
 import inspect
 import logging
 import re
+import threading
 import time
+from dataclasses import dataclass
 from pythonosc import osc_packet
 from typing import (
     overload,
     List,
+    Mapping,
     Union,
     Any,
     AnyStr,
@@ -21,6 +24,26 @@ from typing import (
 )
 from pythonosc.osc_message import OscMessage
 from pythonosc.osc_message_builder import ArgValue
+
+
+# Point-in-time, immutable view of the dispatcher configuration:
+# (version, address -> handlers, default handler).
+ConfigSnapshot = Tuple[int, "Mapping[str, Tuple[Handler, ...]]", Optional["Handler"]]
+
+
+@dataclass
+class DispatchFailure:
+    """Record of a handler callback that raised while dispatching a message.
+
+    A failure is captured instead of being propagated so that one broken
+    callback cannot prevent the other handlers matched by the same message
+    from running. Each raised callback produces its own record.
+    """
+
+    address: str
+    handler: "Handler"
+    client_address: Tuple[str, int]
+    error: BaseException
 
 
 class Handler(object):
@@ -128,7 +151,11 @@ class Dispatcher(object):
     Maps OSC addresses to handler functions and invokes the correct handler when a message comes in.
     """
 
-    def __init__(self, strict_timing: bool = True) -> None:
+    def __init__(
+        self,
+        strict_timing: bool = True,
+        failure_buffer_size: Optional[int] = None,
+    ) -> None:
         """Initialize the dispatcher.
 
         Args:
@@ -138,10 +165,84 @@ class Dispatcher(object):
                 If False, messages are dispatched immediately regardless of their timetag.
                 Disabling this can prevent memory/thread accumulation issues when receiving
                 many future-dated messages.
+            failure_buffer_size: Maximum number of :class:`DispatchFailure` records to retain.
+                When full, the oldest records are dropped. ``None`` (default) keeps every
+                failure until :meth:`clear_failures` is called.
         """
         self._map: DefaultDict[str, List[Handler]] = collections.defaultdict(list)
         self._default_handler: Optional[Handler] = None
         self._strict_timing = strict_timing
+        # Monotonic configuration version. Every mapping change (map/unmap/default
+        # handler) bumps it, allowing in-flight messages to keep using a fixed
+        # snapshot of the configuration they were matched against. The same lock
+        # guards the mapping mutations and snapshot creation so that a message
+        # never observes a half-applied configuration update.
+        self._version = 0
+        self._config_lock = threading.RLock()
+        # One record per failed callback. Failures never interrupt the dispatch of
+        # the other handlers matched by the same message.
+        self._failures: collections.deque[DispatchFailure] = collections.deque(
+            maxlen=failure_buffer_size
+        )
+
+    @property
+    def failures(self) -> List[DispatchFailure]:
+        """Return a snapshot copy of every recorded callback failure."""
+        return list(self._failures)
+
+    @property
+    def version(self) -> int:
+        """Monotonic configuration version, bumped on every mapping change."""
+        return self._version
+
+    def clear_failures(self) -> None:
+        """Drop all recorded callback failures."""
+        self._failures.clear()
+
+    def _record_failure(
+        self,
+        address: str,
+        handler: "Handler",
+        client_address: Tuple[str, int],
+        error: BaseException,
+    ) -> None:
+        """Store and log a single failed handler invocation without raising."""
+        self._failures.append(
+            DispatchFailure(
+                address=address,
+                handler=handler,
+                client_address=client_address,
+                error=error,
+            )
+        )
+        logging.error(
+            "Handler %r raised while dispatching %s",
+            getattr(handler, "callback", handler),
+            address,
+            exc_info=error,
+        )
+
+    def _bump_version(self) -> None:
+        """Advance the configuration version after a mapping change.
+
+        Already-running dispatches hold their own snapshot and are unaffected;
+        only subsequently processed messages observe the new version.
+        """
+        with self._config_lock:
+            self._version += 1
+
+    def _snapshot(self) -> ConfigSnapshot:
+        """Return an immutable point-in-time view of the current configuration.
+
+        The returned handler tuples are independent copies, so concurrent map or
+        unmap calls cannot mutate what an in-flight message is iterating over.
+        """
+        with self._config_lock:
+            return (
+                self._version,
+                {addr: tuple(handlers) for addr, handlers in self._map.items()},
+                self._default_handler,
+            )
 
     def map(
         self,
@@ -183,7 +284,9 @@ class Dispatcher(object):
         # http://opensoundcontrol.org/spec-1_0
         # regarding multiple mappings
         handlerobj = Handler(handler, list(args), needs_reply_address)
-        self._map[address].append(handlerobj)
+        with self._config_lock:
+            self._map[address].append(handlerobj)
+            self._bump_version()
         return handlerobj
 
     @overload
@@ -218,33 +321,32 @@ class Dispatcher(object):
         pass
 
     def unmap(self, address, handler, *args, needs_reply_address=False):
-        try:
-            if isinstance(handler, Handler):
-                self._map[address].remove(handler)
-            else:
-                self._map[address].remove(
-                    Handler(handler, list(args), needs_reply_address)
-                )
-        except ValueError as e:
-            if str(e) == "list.remove(x): x not in list":
-                raise ValueError(
-                    f"Address '{address}' doesn't have handler '{handler}' mapped to it"
-                ) from e
+        with self._config_lock:
+            try:
+                if isinstance(handler, Handler):
+                    self._map[address].remove(handler)
+                else:
+                    self._map[address].remove(
+                        Handler(handler, list(args), needs_reply_address)
+                    )
+            except ValueError as e:
+                if str(e) == "list.remove(x): x not in list":
+                    raise ValueError(
+                        f"Address '{address}' doesn't have handler '{handler}' mapped to it"
+                    ) from e
+            self._bump_version()
 
-    def handlers_for_address(
-        self, address_pattern: str
-    ) -> Generator[Handler, None, None]:
-        """Yields handlers matching an address
+    @staticmethod
+    def _compile_address_pattern(
+        address_pattern: str,
+    ) -> Optional["re.Pattern[str]"]:
+        """Convert an OSC Address Pattern to a compiled Python regular expression.
 
-        Args:
-            address_pattern: Address to match
+        Spec: https://opensoundcontrol.stanford.edu/spec-1_0.html#osc-address-patterns
 
-        Returns:
-            Generator yielding Handlers matching address_pattern
+        Returns ``None`` when the pattern cannot be compiled, in which case it
+        matches nothing.
         """
-        # Convert OSC Address Pattern to a Python regular expression.
-        # Spec: https://opensoundcontrol.stanford.edu/spec-1_0.html#osc-address-patterns
-
         pattern = "^"
         i = 0
         while i < len(address_pattern):
@@ -286,23 +388,69 @@ class Dispatcher(object):
         pattern += "$"
 
         try:
-            patterncompiled = re.compile(pattern)
+            return re.compile(pattern)
         except re.error:
             # If the pattern is invalid, it won't match anything.
-            return
+            return None
 
-        matched = False
-        for addr, handlers in self._map.items():
+    def _matched_handlers(
+        self,
+        address_pattern: str,
+        snapshot: ConfigSnapshot,
+    ) -> List[Handler]:
+        """Return every handler matching an address within a fixed configuration.
+
+        The same :class:`Handler` instance is returned at most once even when it
+        is reachable through several matching addresses, so a subscription is
+        never dispatched twice for a single message.
+
+        Args:
+            address_pattern: Address to match
+            snapshot: Configuration snapshot captured for this message
+
+        Returns:
+            Deduplicated list of matching handlers, falling back to the default
+            handler when nothing else matched.
+        """
+        _version, mapping, default_handler = snapshot
+        patterncompiled = self._compile_address_pattern(address_pattern)
+        if patterncompiled is None:
+            return []
+
+        matched: List[Handler] = []
+        seen: set[int] = set()
+        for addr, handlers in mapping.items():
             if patterncompiled.match(addr) or (
                 "*" in addr
                 and re.match(addr.replace("*", ".*?") + "$", address_pattern)
             ):
-                yield from handlers
-                matched = True
+                for handler in handlers:
+                    if id(handler) in seen:
+                        continue
+                    seen.add(id(handler))
+                    matched.append(handler)
 
-        if not matched and self._default_handler:
+        if not matched and default_handler is not None:
             logging.debug("No handler matched but default handler present, added it.")
-            yield self._default_handler
+            matched.append(default_handler)
+        return matched
+
+    def handlers_for_address(
+        self, address_pattern: str
+    ) -> Generator[Handler, None, None]:
+        """Yield handlers matching an address in the current configuration.
+
+        Each handler is yielded at most once per call. For dispatch, prefer the
+        snapshot-based path so that a message keeps using one configuration
+        version for its whole lifetime.
+
+        Args:
+            address_pattern: Address to match
+
+        Returns:
+            Generator yielding Handlers matching address_pattern
+        """
+        yield from self._matched_handlers(address_pattern, self._snapshot())
 
     def call_handlers_for_packet(
         self, data: bytes, client_address: Tuple[str, int]
@@ -310,6 +458,11 @@ class Dispatcher(object):
         """Invoke handlers for all messages in OSC packet
 
         The incoming OSC Packet is decoded and the handlers for each included message is found and invoked.
+        Each message captures one configuration snapshot before any of its handlers run, so a mapping
+        added or removed by a handler cannot change the handlers of the message currently being
+        processed; the change is observed by the next message. Each matched handler is invoked at
+        most once per message, and a handler raising an exception is recorded in :attr:`failures`
+        without interrupting the other matched handlers.
 
         Args:
             data: Data of packet
@@ -321,15 +474,27 @@ class Dispatcher(object):
         try:
             packet = osc_packet.OscPacket(data)
             for timed_msg in packet.messages:
+                # Pin the configuration version for this message before any
+                # handler runs. Remaps during invocation only affect later messages.
+                snapshot = self._snapshot()
                 now = time.time()
-                handlers = self.handlers_for_address(timed_msg.message.address)
+                handlers = self._matched_handlers(timed_msg.message.address, snapshot)
                 if not handlers:
                     continue
                 # If the message is to be handled later, then so be it.
                 if self._strict_timing and timed_msg.time > now:
                     time.sleep(timed_msg.time - now)
                 for handler in handlers:
-                    result = handler.invoke(client_address, timed_msg.message)
+                    try:
+                        result = handler.invoke(client_address, timed_msg.message)
+                    except Exception as error:
+                        self._record_failure(
+                            timed_msg.message.address,
+                            handler,
+                            client_address,
+                            error,
+                        )
+                        continue
                     if result is not None:
                         results.append(result)
         except osc_packet.ParseError:
@@ -351,6 +516,11 @@ class Dispatcher(object):
         if no parameters were registered, then it is just called like this:
           handler('/address that triggered the message',
                   osc_msg_arg1, osc_msg_arg2, osc_msg_param3, ...)
+
+        As with the synchronous path, each message pins one configuration snapshot before its
+        handlers run, each matched handler runs at most once per message, and a raising handler
+        is recorded in :attr:`failures` without cancelling the remaining handlers.
+        Task cancellation (``asyncio.CancelledError``) is still allowed to propagate.
         """
 
         # Get OSC messages from all bundles or standalone message.
@@ -358,17 +528,29 @@ class Dispatcher(object):
         try:
             packet = osc_packet.OscPacket(data)
             for timed_msg in packet.messages:
+                # Pin the configuration version for this message before any
+                # handler runs. Remaps during invocation only affect later messages.
+                snapshot = self._snapshot()
                 now = time.time()
-                handlers = self.handlers_for_address(timed_msg.message.address)
+                handlers = self._matched_handlers(timed_msg.message.address, snapshot)
                 if not handlers:
                     continue
                 # If the message is to be handled later, then so be it.
                 if self._strict_timing and timed_msg.time > now:
                     await asyncio.sleep(timed_msg.time - now)
                 for handler in handlers:
-                    result = await handler.async_invoke(
-                        client_address, timed_msg.message
-                    )
+                    try:
+                        result = await handler.async_invoke(
+                            client_address, timed_msg.message
+                        )
+                    except Exception as error:
+                        self._record_failure(
+                            timed_msg.message.address,
+                            handler,
+                            client_address,
+                            error,
+                        )
+                        continue
                     if result is not None:
                         results.append(result)
         except osc_packet.ParseError:
@@ -386,6 +568,8 @@ class Dispatcher(object):
             handler: Callback function to handle unmapped requests
             needs_reply_address: Whether the callback shall be passed the client address
         """
-        self._default_handler = (
-            None if (handler is None) else Handler(handler, [], needs_reply_address)
-        )
+        with self._config_lock:
+            self._default_handler = (
+                None if (handler is None) else Handler(handler, [], needs_reply_address)
+            )
+            self._bump_version()

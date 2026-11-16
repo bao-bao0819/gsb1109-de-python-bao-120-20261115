@@ -1,6 +1,11 @@
 import unittest
 
-from pythonosc.dispatcher import Dispatcher, Handler
+from pythonosc.dispatcher import Dispatcher, Handler, DispatchFailure
+from pythonosc.osc_bundle_builder import OscBundleBuilder, IMMEDIATELY
+from pythonosc.osc_message_builder import build_msg
+
+
+CLIENT_ADDRESS = ("127.0.0.1", 1234)
 
 
 class TestDispatcher(unittest.IsolatedAsyncioTestCase):
@@ -261,6 +266,217 @@ class TestDispatcher(unittest.IsolatedAsyncioTestCase):
             dgram_async, ("127.0.0.1", 1234)
         )
         self.assertTrue(async_called)
+
+    def test_version_bumps_on_every_mapping_change(self):
+        start = self.dispatcher.version
+        returned = self.dispatcher.map("/a", lambda *args: None)
+        self.assertEqual(start + 1, self.dispatcher.version)
+        self.dispatcher.unmap("/a", returned)
+        self.assertEqual(start + 2, self.dispatcher.version)
+        self.dispatcher.set_default_handler(lambda *args: None)
+        self.assertEqual(start + 3, self.dispatcher.version)
+
+    def test_message_keeps_fixed_config_version_when_handler_remaps(self):
+        calls = []
+        remapped = False
+
+        def late_handler(address, *args):
+            calls.append("late")
+
+        def recorder(address, *args):
+            calls.append("recorder")
+
+        def remapper(address, *args):
+            nonlocal remapped
+            calls.append("remapper")
+            if remapped:
+                return
+            remapped = True
+            # Add a new subscription and revoke an existing one mid-dispatch.
+            self.dispatcher.map("/a", late_handler)
+            self.dispatcher.unmap("/a", recorder_handler)
+
+        self.dispatcher.map("/a", remapper)
+        recorder_handler = self.dispatcher.map("/a", recorder)
+
+        results = self.dispatcher.call_handlers_for_packet(
+            build_msg("/a").dgram, CLIENT_ADDRESS
+        )
+
+        # The current message keeps its original snapshot: the revoked recorder
+        # still runs and the newly mapped late handler does not.
+        self.assertEqual(["remapper", "recorder"], calls)
+        self.assertEqual([], results)
+        # The next message observes the new configuration version.
+        calls.clear()
+        self.dispatcher.call_handlers_for_packet(build_msg("/a").dgram, CLIENT_ADDRESS)
+        self.assertEqual(["remapper", "late"], calls)
+        self.assertEqual([], self.dispatcher.failures)
+
+    def test_revocation_only_affects_later_messages_in_bundle(self):
+        calls = []
+
+        def target(address, *args):
+            calls.append("target")
+
+        def revoker(address, *args):
+            self.dispatcher.unmap("/a", target_handler)
+
+        target_handler = self.dispatcher.map("/a", target)
+        self.dispatcher.map("/revoke", revoker)
+
+        bundle = OscBundleBuilder(IMMEDIATELY)
+        bundle.add_content(build_msg("/revoke"))
+        bundle.add_content(build_msg("/a"))
+
+        self.dispatcher.call_handlers_for_packet(bundle.build().dgram, CLIENT_ADDRESS)
+
+        # The handler was revoked while processing the first message, so the
+        # second message (processed afterwards) must no longer dispatch it.
+        self.assertEqual([], calls)
+
+    def test_handler_failure_is_recorded_without_blocking_others(self):
+        order = []
+
+        def good_before(address, *args):
+            order.append("before")
+
+        def boom(address, *args):
+            raise RuntimeError("callback exploded")
+
+        def good_after(address, *args):
+            order.append("after")
+
+        self.dispatcher.map("/a", good_before)
+        failing_handler = self.dispatcher.map("/a", boom)
+        self.dispatcher.map("/a", good_after)
+
+        # Must not raise even though the middle handler fails.
+        results = self.dispatcher.call_handlers_for_packet(
+            build_msg("/a").dgram, CLIENT_ADDRESS
+        )
+
+        self.assertEqual(["before", "after"], order)
+        self.assertEqual([], results)
+        failures = self.dispatcher.failures
+        self.assertEqual(1, len(failures))
+        failure = failures[0]
+        self.assertIsInstance(failure, DispatchFailure)
+        self.assertEqual("/a", failure.address)
+        self.assertIs(failing_handler, failure.handler)
+        self.assertEqual(CLIENT_ADDRESS, failure.client_address)
+        self.assertIsInstance(failure.error, RuntimeError)
+
+    def test_each_failing_callback_is_recorded_separately(self):
+        def boom1(address, *args):
+            raise ValueError("one")
+
+        def boom2(address, *args):
+            raise ValueError("two")
+
+        self.dispatcher.map("/a", boom1)
+        self.dispatcher.map("/a", boom2)
+
+        self.dispatcher.call_handlers_for_packet(build_msg("/a").dgram, CLIENT_ADDRESS)
+
+        failures = self.dispatcher.failures
+        self.assertEqual(2, len(failures))
+        self.assertEqual(["one", "two"], [str(f.error) for f in failures])
+        self.dispatcher.clear_failures()
+        self.assertEqual([], self.dispatcher.failures)
+
+    def test_failure_buffer_is_bounded_and_drops_oldest(self):
+        dispatcher = Dispatcher(failure_buffer_size=2)
+
+        def make_boom(message):
+            def boom(address, *args):
+                raise RuntimeError(message)
+
+            return boom
+
+        dispatcher.map("/a", make_boom("one"))
+        dispatcher.map("/a", make_boom("two"))
+        dispatcher.map("/a", make_boom("three"))
+
+        dispatcher.call_handlers_for_packet(build_msg("/a").dgram, CLIENT_ADDRESS)
+
+        self.assertEqual(["two", "three"], [str(f.error) for f in dispatcher.failures])
+
+    def test_same_handler_object_matching_several_addresses_dispatches_once(self):
+        calls = []
+
+        def shared(address, *args):
+            calls.append(address)
+
+        shared_handler = self.dispatcher.map("/a", shared)
+        # Make the same Handler instance reachable through a second, also
+        # matching address bucket.
+        self.dispatcher._map["/*"].append(shared_handler)
+
+        self.dispatcher.call_handlers_for_packet(build_msg("/a").dgram, CLIENT_ADDRESS)
+
+        self.assertEqual(1, len(calls))
+
+    def test_distinct_registrations_are_still_dispatched_separately(self):
+        calls = []
+
+        def shared_callback(address, *args):
+            calls.append(address)
+
+        # Two separate registrations create two distinct subscriptions and must
+        # both be dispatched, even though the callback function is identical.
+        self.dispatcher.map("/a", shared_callback)
+        self.dispatcher.map("/a", shared_callback)
+
+        self.dispatcher.call_handlers_for_packet(build_msg("/a").dgram, CLIENT_ADDRESS)
+
+        self.assertEqual(2, len(calls))
+
+    async def test_async_failure_does_not_block_other_handlers(self):
+        order = []
+
+        async def good(address, *args):
+            order.append("good")
+
+        async def boom(address, *args):
+            raise RuntimeError("async boom")
+
+        self.dispatcher.map("/a", good)
+        failing_handler = self.dispatcher.map("/a", boom)
+        self.dispatcher.map("/a", good)
+
+        await self.dispatcher.async_call_handlers_for_packet(
+            build_msg("/a").dgram, CLIENT_ADDRESS
+        )
+
+        self.assertEqual(["good", "good"], order)
+        failures = self.dispatcher.failures
+        self.assertEqual(1, len(failures))
+        self.assertIs(failing_handler, failures[0].handler)
+        self.assertIsInstance(failures[0].error, RuntimeError)
+
+    async def test_async_message_keeps_fixed_config_version(self):
+        calls = []
+
+        def late_handler(address, *args):
+            calls.append("late")
+
+        async def remapper(address, *args):
+            calls.append("remapper")
+            self.dispatcher.map("/a", late_handler)
+
+        self.dispatcher.map("/a", remapper)
+
+        await self.dispatcher.async_call_handlers_for_packet(
+            build_msg("/a").dgram, CLIENT_ADDRESS
+        )
+        self.assertEqual(["remapper"], calls)
+
+        calls.clear()
+        await self.dispatcher.async_call_handlers_for_packet(
+            build_msg("/a").dgram, CLIENT_ADDRESS
+        )
+        self.assertEqual(["remapper", "late"], calls)
 
 
 if __name__ == "__main__":

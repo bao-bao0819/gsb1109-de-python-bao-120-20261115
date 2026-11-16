@@ -139,6 +139,50 @@ server when running as a client.  Handler functions should return one of:
 If the handler function response is not None it will be encoded in an OSCMessage and sent to the
 remote client or server.
 
+
+Configuration Versioning
+-------------------------
+
+Subscriptions can be added or removed while the server is running. To keep processing predictable,
+each incoming message is pinned to one immutable configuration version before any of its handlers
+run. The handler set matched for that message therefore stays fixed for its whole lifetime:
+
+* Remapping or unmapping an address from inside a handler does not change the handlers of the
+  message currently being processed.
+* Such a change only affects subsequent messages (including later messages inside the same bundle),
+  which capture a fresh configuration snapshot.
+
+The current configuration version is exposed as the read-only ``Dispatcher.version`` attribute and
+is incremented on every ``map``, ``unmap`` or ``set_default_handler`` call.
+
+A single message may still match several subscriptions. Each matched ``Handler`` instance is
+invoked at most once per message, even when it is reachable through several matching addresses, so
+the same subscription is never dispatched twice for one message.
+
+
+Handler Failures
+-----------------
+
+A failing callback must not prevent the other subscriptions matched by the same message from
+running. When a handler raises, the exception is caught, logged, and recorded as a
+``DispatchFailure`` rather than propagated. The remaining matched handlers are still invoked, and
+each raised subscription produces its own record.
+
+Failures are available from the read-only ``Dispatcher.failures`` list and can be reset with
+``Dispatcher.clear_failures``. Pass ``failure_buffer_size`` to the constructor to cap how many
+records are retained; when the buffer is full the oldest records are dropped.
+
+.. code-block:: python
+
+    disp = Dispatcher(failure_buffer_size=100)
+    disp.map("/some/address", some_callback)
+
+    # ... after dispatching messages ...
+    for failure in disp.failures:
+        print(failure.address, failure.handler, failure.error)
+    disp.clear_failures()
+
+
 Dispatcher Module Documentation
 ---------------------------------
 

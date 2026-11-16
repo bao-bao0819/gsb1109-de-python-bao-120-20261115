@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 ## Unreleased
 
 - Preserve explicit empty-string arguments in message helpers and TCP clients while keeping omitted values argument-free.
+- Pin each dispatched message to a single dispatcher configuration version, so a handler mapping or unmapping addresses while a message is being processed cannot change that message's handlers; the change only affects later messages.
+- Invoke each matched handler at most once per message even when the same `Handler` instance is reachable through several matching addresses.
+- Isolate handler failures: a raising callback is recorded in `Dispatcher.failures` (one `DispatchFailure` per failed subscription, cleared with `clear_failures`) without interrupting the other matched handlers. An optional `failure_buffer_size` bounds the retained records.
 
 ## [1.10.2]
 
