@@ -59,12 +59,21 @@ class OscBundle(object):
                 # Get the datagram for the sub content.
                 content_dgram = self._dgram[index : index + content_size]
                 # Increment our position index up to the next possible content.
+                # The next element starts exactly content_size bytes later, as
+                # given by the size prefix, regardless of what is inside this
+                # element.
                 index += content_size
                 # Parse the content into an OSC message or bundle.
                 if OscBundle.dgram_is_bundle(content_dgram):
                     contents.append(OscBundle(content_dgram))
                 elif osc_message.OscMessage.dgram_is_message(content_dgram):
-                    contents.append(osc_message.OscMessage(content_dgram))
+                    try:
+                        contents.append(osc_message.OscMessage(content_dgram))
+                    except osc_message.ParseError as e:
+                        # A malformed message (e.g. an abnormal string or blob
+                        # length) only invalidates this element; the following
+                        # elements are still located through their size prefix.
+                        logging.warning(f"Skipping malformed bundle element: {e}")
                 else:
                     logging.warning(
                         f"Could not identify content type of dgram {content_dgram!r}"

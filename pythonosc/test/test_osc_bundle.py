@@ -70,6 +70,28 @@ _DGRAM_UNKNOWN_TYPE = (
     b"#bundle\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x0ciamnotaslash"
 )
 
+# The middle message declares a 16-byte blob that its element does not
+# contain; the following message is still located through its size prefix.
+_DGRAM_MALFORMED_MESSAGE_IN_BUNDLE = (
+    b"#bundle\x00"
+    b"\x00\x00\x00\x00\x00\x00\x00\x01"
+    # First message, valid.
+    b"\x00\x00\x00\x10"
+    b"/SYNC\x00\x00\x00"
+    b",f\x00\x00"
+    b"?\x00\x00\x00"
+    # Second message, abnormal blob length.
+    b"\x00\x00\x00\x10"
+    b"/bad\x00\x00\x00\x00"
+    b",b\x00\x00"
+    b"\x00\x00\x00\x10"
+    # Third message, valid again.
+    b"\x00\x00\x00\x10"
+    b"/SYNC\x00\x00\x00"
+    b",f\x00\x00"
+    b"@\x00\x00\x00"
+)
+
 
 class TestOscBundle(unittest.TestCase):
     def test_switch_goes_off(self):
@@ -139,6 +161,16 @@ class TestOscBundle(unittest.TestCase):
 
     def test_unknown_type(self):
         osc_bundle.OscBundle(_DGRAM_UNKNOWN_TYPE)
+
+    def test_malformed_message_only_affects_itself(self):
+        bundle = osc_bundle.OscBundle(_DGRAM_MALFORMED_MESSAGE_IN_BUNDLE)
+        self.assertEqual(2, bundle.num_contents)
+        for content in bundle:
+            self.assertEqual(osc_message.OscMessage, type(content))
+            self.assertEqual("/SYNC", content.address)
+        # The element after the malformed one is found via its size prefix,
+        # not by scanning for zero padding.
+        self.assertAlmostEqual(2.0, bundle.content(1).params[0])
 
 
 if __name__ == "__main__":

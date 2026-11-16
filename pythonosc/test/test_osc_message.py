@@ -135,6 +135,60 @@ class TestOscMessage(unittest.TestCase):
         self.assertEqual(1, len(msg.params))
         self.assertEqual(512, len(msg.params[0]))
 
+    def test_fields_map_params_back_to_datagram_bytes(self):
+        msg = osc_message.OscMessage(_DGRAM_ALL_STANDARD_TYPES_OF_PARAMS)
+        fields = msg.fields
+        self.assertEqual(4, len(fields))
+
+        self.assertEqual("i", fields[0].type)
+        self.assertEqual(3, fields[0].value)
+        self.assertEqual((16, 20), fields[0].spans["value"])
+
+        self.assertEqual("f", fields[1].type)
+        self.assertEqual((20, 24), fields[1].spans["value"])
+
+        self.assertEqual("s", fields[2].type)
+        self.assertEqual("ABC", fields[2].value)
+        self.assertEqual((24, 27), fields[2].spans["content"])
+        self.assertEqual((27, 28), fields[2].spans["terminator"])
+        self.assertEqual((28, 28), fields[2].spans["padding"])
+
+        self.assertEqual("b", fields[3].type)
+        self.assertEqual(b"stuff\x00\x00\x00", fields[3].value)
+        self.assertEqual((28, 32), fields[3].spans["length"])
+        self.assertEqual((32, 40), fields[3].spans["payload"])
+        self.assertEqual((40, 40), fields[3].spans["padding"])
+
+        # Spans slice the original bytes out of the datagram.
+        for field in fields:
+            for start, end in field.spans.values():
+                self.assertGreaterEqual(start, 0)
+                self.assertLessEqual(end, len(msg.dgram))
+        content = msg.dgram[
+            fields[2].spans["content"][0] : fields[2].spans["content"][1]
+        ]
+        self.assertEqual(b"ABC", content)
+        payload = msg.dgram[
+            fields[3].spans["payload"][0] : fields[3].spans["payload"][1]
+        ]
+        self.assertEqual(b"stuff\x00\x00\x00", payload)
+
+    def test_fields_for_params_without_wire_data(self):
+        msg = osc_message.OscMessage(_DGRAM_ALL_NON_STANDARD_TYPES_OF_PARAMS)
+        fields = msg.fields
+        # The empty array adds no field: brackets carry no wire data.
+        self.assertEqual(5, len(fields))
+        for field, tag in zip(fields, "TFNth"):
+            self.assertEqual(tag, field.type)
+        for field in fields[:3]:  # T, F and N carry no bytes.
+            self.assertEqual({}, field.spans)
+        self.assertEqual((20, 28), fields[3].spans["value"])
+        self.assertEqual((28, 36), fields[4].spans["value"])
+
+    def test_fields_empty_when_no_params(self):
+        msg = osc_message.OscMessage(_DGRAM_NO_PARAMS)
+        self.assertEqual([], msg.fields)
+
 
 if __name__ == "__main__":
     unittest.main()

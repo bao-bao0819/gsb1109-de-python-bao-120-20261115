@@ -5,9 +5,12 @@ import struct
 from pythonosc.parsing import ntp
 from datetime import datetime, timedelta
 
-from typing import Union, Tuple, cast
+from typing import Dict, Union, Tuple, cast
 
 MidiPacket = Tuple[int, int, int, int]
+
+# A byte range in a datagram: (start, end) offsets, end exclusive.
+Span = Tuple[int, int]
 
 
 class ParseError(Exception):
@@ -67,6 +70,32 @@ def get_string(dgram: bytes, start_index: int) -> Tuple[str, int]:
     Raises:
       ParseError if the datagram could not be parsed.
     """
+    value, next_index, _ = get_string_field(dgram, start_index)
+    return value, next_index
+
+
+def get_string_field(
+    dgram: bytes, start_index: int
+) -> Tuple[str, int, Dict[str, Span]]:
+    """Get a python string and the byte ranges of its wire components.
+
+    Same parsing as get_string, but also maps the decoded value back to the
+    original bytes, distinguishing the string content, its null terminator
+    and the 0-3 alignment padding bytes.
+
+    Args:
+      dgram: A datagram packet.
+      start_index: An index where the string starts in the datagram.
+
+    Returns:
+      A tuple containing the string, the new end index and a dict of spans
+      with keys "content", "terminator" and "padding". Spans are (start, end)
+      offset pairs into the datagram; the padding span is empty when the
+      terminator already completes the 32-bit alignment.
+
+    Raises:
+      ParseError if the datagram could not be parsed.
+    """
     if start_index < 0:
         raise ParseError("start_index < 0")
     offset = 0
@@ -85,7 +114,12 @@ def get_string(dgram: bytes, start_index: int) -> Tuple[str, int]:
             raise ParseError("Datagram is too short")
 
         data_str = dgram[start_index : start_index + offset]
-        return data_str.decode("utf-8"), start_index + total_len
+        spans = {
+            "content": (start_index, start_index + offset),
+            "terminator": (start_index + offset, start_index + offset + 1),
+            "padding": (start_index + offset + 1, start_index + total_len),
+        }
+        return data_str.decode("utf-8"), start_index + total_len, spans
     except UnicodeDecodeError as error:
         raise ParseError(f"Could not decode OSC string: {error}") from error
     except IndexError as ie:
@@ -317,6 +351,34 @@ def get_blob(dgram: bytes, start_index: int) -> Tuple[bytes, int]:
     Raises:
       ParseError if the datagram could not be parsed.
     """
+    blob, next_index, _ = get_blob_field(dgram, start_index)
+    return blob, next_index
+
+
+def get_blob_field(
+    dgram: bytes, start_index: int
+) -> Tuple[bytes, int, Dict[str, Span]]:
+    """Get a blob and the byte ranges of its wire components.
+
+    Same parsing as get_blob, but also maps the decoded value back to the
+    original bytes, distinguishing the int32 length prefix, the payload and
+    the 0-3 alignment padding bytes. The payload is exactly the number of
+    bytes given by the length prefix, so trailing zero bytes in the payload
+    are kept as data and never confused with padding.
+
+    Args:
+      dgram: A datagram packet.
+      start_index: An index where the blob starts in the datagram.
+
+    Returns:
+      A tuple containing the blob, the new end index and a dict of spans
+      with keys "length", "payload" and "padding". Spans are (start, end)
+      offset pairs into the datagram; the padding span is empty when the
+      payload already ends on a 32-bit boundary.
+
+    Raises:
+      ParseError if the datagram could not be parsed.
+    """
     if start_index < 0:
         raise ParseError("start_index < 0")
     size, payload_start = get_int(dgram, start_index)
@@ -327,7 +389,12 @@ def get_blob(dgram: bytes, start_index: int) -> Tuple[bytes, int]:
     next_index = payload_end + (-size % _BLOB_DGRAM_PAD)
     if next_index > len(dgram):
         raise ParseError("Datagram is too short.")
-    return dgram[payload_start:payload_end], next_index
+    spans = {
+        "length": (start_index, payload_start),
+        "payload": (payload_start, payload_end),
+        "padding": (payload_end, next_index),
+    }
+    return dgram[payload_start:payload_end], next_index, spans
 
 
 def write_blob(val: bytes) -> bytes:

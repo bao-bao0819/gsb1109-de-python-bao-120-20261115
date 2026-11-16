@@ -55,6 +55,50 @@ class TestString(unittest.TestCase):
         self.assertRaises(osc_types.ParseError, osc_types.get_string, b"abc\x00", -1)
 
 
+class TestStringField(unittest.TestCase):
+    def test_spans_split_content_terminator_and_padding(self):
+        value, next_index, spans = osc_types.get_string_field(b"AB\x00\x00", 0)
+        self.assertEqual("AB", value)
+        self.assertEqual(4, next_index)
+        self.assertEqual((0, 2), spans["content"])
+        self.assertEqual((2, 3), spans["terminator"])
+        self.assertEqual((3, 4), spans["padding"])
+
+    def test_spans_without_padding(self):
+        value, next_index, spans = osc_types.get_string_field(b"ABC\x00", 0)
+        self.assertEqual("ABC", value)
+        self.assertEqual(4, next_index)
+        self.assertEqual((0, 3), spans["content"])
+        self.assertEqual((3, 4), spans["terminator"])
+        self.assertEqual((4, 4), spans["padding"])
+
+    def test_spans_respect_start_index(self):
+        dgram = b"skip" + osc_types.write_string("café 🎵") + b"tail"
+        value, next_index, spans = osc_types.get_string_field(dgram, 4)
+        self.assertEqual("café 🎵", value)
+        self.assertEqual(len(dgram) - 4, next_index)
+        for start, end in spans.values():
+            self.assertGreaterEqual(start, 4)
+            self.assertLessEqual(end, next_index)
+        content = dgram[spans["content"][0] : spans["content"][1]]
+        self.assertEqual("café 🎵", content.decode("utf-8"))
+        self.assertEqual(
+            b"\x00", dgram[spans["terminator"][0] : spans["terminator"][1]]
+        )
+
+    def test_matches_get_string(self):
+        for dgram in (b"A\x00\x00\x00", b"ABCD\x00\x00\x00\x00", b"\x00\x00\x00\x00"):
+            value, next_index, _ = osc_types.get_string_field(dgram, 0)
+            self.assertEqual((value, next_index), osc_types.get_string(dgram, 0))
+
+    def test_raises_like_get_string(self):
+        for case in (b"blablaba", b"", b"\x00", True):
+            self.assertRaises(osc_types.ParseError, osc_types.get_string_field, case, 0)
+        self.assertRaises(
+            osc_types.ParseError, osc_types.get_string_field, b"abc\x00", -1
+        )
+
+
 class TestInteger(unittest.TestCase):
     def test_get_integer(self):
         cases = {
@@ -332,6 +376,53 @@ class TestBlob(unittest.TestCase):
     def test_get_blog_raises_on_wrong_start_index_negative(self):
         self.assertRaises(
             osc_types.ParseError, osc_types.get_blob, b"\x00\x00\x00\x00", -1
+        )
+
+
+class TestBlobField(unittest.TestCase):
+    def test_spans_split_length_payload_and_padding(self):
+        dgram = b"\x00\x00\x00\x02ab\x00\x00"
+        blob, next_index, spans = osc_types.get_blob_field(dgram, 0)
+        self.assertEqual(b"ab", blob)
+        self.assertEqual(8, next_index)
+        self.assertEqual((0, 4), spans["length"])
+        self.assertEqual((4, 6), spans["payload"])
+        self.assertEqual((6, 8), spans["padding"])
+
+    def test_payload_keeps_trailing_zeros(self):
+        dgram = b"\x00\x00\x00\x04\x00\x00\x00\x00"
+        blob, next_index, spans = osc_types.get_blob_field(dgram, 0)
+        self.assertEqual(b"\x00\x00\x00\x00", blob)
+        self.assertEqual(8, next_index)
+        self.assertEqual((0, 4), spans["length"])
+        self.assertEqual((4, 8), spans["payload"])
+        self.assertEqual((8, 8), spans["padding"])
+
+    def test_spans_respect_start_index(self):
+        dgram = b"skip" + osc_types.write_blob(b"stuff\x00\x00\x00") + b"tail"
+        blob, next_index, spans = osc_types.get_blob_field(dgram, 4)
+        self.assertEqual(b"stuff\x00\x00\x00", blob)
+        self.assertEqual(4 + 12, next_index)
+        self.assertEqual((4, 8), spans["length"])
+        self.assertEqual((8, 16), spans["payload"])
+        self.assertEqual((16, 16), spans["padding"])
+        payload = dgram[spans["payload"][0] : spans["payload"][1]]
+        self.assertEqual(b"stuff\x00\x00\x00", payload)
+
+    def test_matches_get_blob(self):
+        for dgram in (
+            b"\x00\x00\x00\x00",
+            b"\x00\x00\x00\x08stuff\x00\x00\x00",
+            b"\x00\x00\x00\x02\x00\x00\x00\x00",
+        ):
+            blob, next_index, _ = osc_types.get_blob_field(dgram, 0)
+            self.assertEqual((blob, next_index), osc_types.get_blob(dgram, 0))
+
+    def test_raises_like_get_blob(self):
+        for case in (b"", True, b"\x00\x00\x00\x08", b"\xff\xff\xff\xff"):
+            self.assertRaises(osc_types.ParseError, osc_types.get_blob_field, case, 0)
+        self.assertRaises(
+            osc_types.ParseError, osc_types.get_blob_field, b"\x00\x00\x00\x00", -1
         )
 
 
