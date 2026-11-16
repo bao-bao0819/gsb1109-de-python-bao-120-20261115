@@ -26,3 +26,8 @@ Tokenizer
 ---------
 .. automodule:: pydifact.tokenizer
     :members:
+
+Message lifecycle
+-----------------
+.. automodule:: pydifact.lifecycle
+    :members:

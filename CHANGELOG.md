@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]
 
+### Added
+- `pydifact.lifecycle`: reconcile business messages into original/correction/cancellation chains keyed by
+  the BGM document identifier (C106/1004) and driven by the message function code (1225). `LifecycleRegistry`
+  links retransmissions under a new interchange reference, parks exact re-deliveries as duplicates, keeps a
+  cancellation tombstone so a late original cannot resurrect a cancelled document, and retains unorderable
+  corrections as a conflict set (`CorrectionConflictWarning`, or `MessageLifecycleError` in strict mode)
+
 ### Fixed
 - Honor `break_lines=True` after the UNA header when serializing an empty segment list.
 

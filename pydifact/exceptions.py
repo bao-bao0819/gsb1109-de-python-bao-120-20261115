@@ -18,6 +18,14 @@ class ValidationError(Exception):
     pass
 
 
+class MessageLifecycleError(Exception):
+    """Raised for problems while reconciling message lifecycles
+
+    (e.g. a message without a usable business key, or an unresolvable
+    correction conflict in strict mode).
+    """
+
+
 # ---------------- Warnings ----------------
 class MissingImplementationWarning(Warning):
     pass
@@ -30,4 +38,15 @@ class NonConformantEDIWarning(Warning):
 
     Suppress it with a standard `warnings` filter; the parser's own warnings
     can also be switched off with `Parser(warn_non_conformant=False)`.
+    """
+
+
+class CorrectionConflictWarning(Warning):
+    """Emitted when two corrections of the same business message cannot be
+    put into a deterministic order.
+
+    This happens when both corrections carry the same (or no) revision
+    information, so neither can be said to supersede the other. Both
+    messages are retained in the chain's conflict set instead of one being
+    silently dropped. Raise an error instead by processing in strict mode.
     """
