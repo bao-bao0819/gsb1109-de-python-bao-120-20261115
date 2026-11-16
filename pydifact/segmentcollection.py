@@ -24,7 +24,7 @@ import codecs
 import datetime
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from typing import Type, TypeVar
+from typing import TYPE_CHECKING, Type, TypeVar
 
 from pydifact.constants import Element, Elements
 from pydifact.control import Characters
@@ -36,6 +36,9 @@ from pydifact.exceptions import (
 from pydifact.parser import Parser
 from pydifact.segments import Segment, SegmentFactory
 from pydifact.serializer import Serializer
+
+if TYPE_CHECKING:
+    from pydifact.cleaning import CleanedMessage
 
 T = TypeVar("T", bound="AbstractSegmentsContainer")
 
@@ -361,6 +364,23 @@ class Message(AbstractSegmentsContainer):
         :return: message version, parsable by pkg_resources.parse_version()
         """
         return f"{self.identifier[1]}.{self.identifier[2]}"
+
+    def clean_export(self, directory: str | None = None) -> "CleanedMessage":
+        """Export this message's coded values, resolved against its directory.
+
+        The directory is derived from the UNH message identifier (e.g. version
+        ``D`` / release ``23A`` → ``d23a``) unless given explicitly. Every
+        entry is bound to the message version, its element path and the code
+        list version actually used. Unknown codes keep their original
+        declaration; if the directory is not available locally, no other
+        (e.g. the latest) directory is applied.
+
+        Args:
+            directory: The EDIFACT directory to resolve against (e.g. "d23a").
+        """
+        from pydifact.cleaning import clean_message
+
+        return clean_message(self, directory=directory)
 
     def get_header_segment(self) -> Segment:
         return Segment(

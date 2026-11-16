@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]
 
+### Added
+- `Message.clean_export()` / `pydifact.cleaning.clean_message()`: cleaned export of a message's coded values,
+  resolved against the EDIFACT directory of its UNH message version. Each entry is bound to the message version,
+  the element path and the code list version (directory) actually used; unknown codes keep their original
+  declaration, an unavailable directory never falls back to the latest one, and 1131/3055 qualifiers are only
+  taken from the same composite occurrence, never from a sibling composite
+
 ### Fixed
 - Honor `break_lines=True` after the UNA header when serializing an empty segment list.
 
