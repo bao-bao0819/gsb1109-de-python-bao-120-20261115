@@ -25,7 +25,7 @@ import socket
 import struct
 import warnings
 
-from smpplib import consts, exceptions, smpp
+from smpplib import consts, exceptions, receipt, registry, smpp
 
 
 class SimpleSequenceGenerator(object):
@@ -94,6 +94,11 @@ class Client(object):
 
         self._socket = None
 
+        # Two-phase (submission vs. delivery) message state, keyed by the
+        # gateway-assigned message id. Sequence numbers are scoped to a
+        # connection and are never used to correlate delivery receipts.
+        self.message_registry = registry.MessageStateRegistry()
+
     def __enter__(self):
         return self
 
@@ -140,6 +145,10 @@ class Client(object):
                 self._socket = self._create_socket()
             self._socket.connect((self.host, self.port))
             self.state = consts.SMPP_CLIENT_STATE_OPEN
+            # Sequence numbers restart on every connection, so pending
+            # sequence-based entries from the previous connection must not be
+            # matched to PDUs of this one. Message-id records are kept.
+            self.message_registry.reset_sequence_scope()
         except socket.error:
             raise exceptions.ConnectionError("Connection refused")
 
@@ -279,12 +288,31 @@ class Client(object):
 
     def _message_received(self, pdu):
         """Handler for received message event"""
+        if receipt.is_delivery_receipt(pdu):
+            self._delivery_receipt_received(pdu)
         status = self.message_received_handler(pdu=pdu)
         if status is None:
             status = consts.SMPP_ESME_ROK
         dsmr = smpp.make_pdu('deliver_sm_resp', client=self, status=status)
         dsmr.sequence = pdu.sequence
         self.send_pdu(dsmr)
+
+    def _delivery_receipt_received(self, pdu):
+        """Record a delivery receipt against the gateway message id.
+
+        Correlation never uses the PDU sequence number: a receipt references
+        the message id returned in submit_sm_resp. The receipt is appended to
+        the message's history even when it arrives late or after a terminal
+        failure, so the original successful submission is preserved.
+        """
+        try:
+            return self.message_registry.record_delivery(pdu)
+        except ValueError:
+            self.logger.warning(
+                'Delivery receipt without a recognizable message id, sequence=%s',
+                pdu.sequence,
+            )
+            return None
 
     def _enquire_link_received(self, pdu):
         """Response to enquire_link"""
@@ -363,6 +391,10 @@ class Client(object):
                 self.logger.info('Unbind command received')
                 return
             elif pdu.command == 'submit_sm_resp':
+                # Record phase one. On success the record becomes indexed by
+                # the gateway message id; on failure the submit event is still
+                # kept and no message-id record is created.
+                self.message_registry.record_submit_response(pdu)
                 self.message_sent_handler(pdu=pdu)
             elif pdu.command == 'deliver_sm':
                 self._message_received(pdu)
@@ -408,6 +440,10 @@ class Client(object):
 
         ssm = smpp.make_pdu('submit_sm', client=self, **kwargs)
         self.send_pdu(ssm)
+        # Remember the outgoing sequence so submit_sm_resp can be matched on
+        # this connection. The resulting record is later indexed by the
+        # gateway message id, not by this sequence number.
+        self.message_registry.note_submit(ssm)
         return ssm
 
     def query_message(self, **kwargs):

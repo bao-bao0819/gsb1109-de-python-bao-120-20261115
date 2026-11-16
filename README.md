@@ -66,6 +66,28 @@ t.start()
 ```
 **Note:** When listening, the client will automatically send an `enquire_link` command when the socket timeouts. You may override that behavior by passing `auto_send_enquire_link=False` as an argument to `listen()`. In that case, `socket.timeout` exceptions will bubble up.
 
+## Tracking submission and delivery state
+
+A message has two independent phases and the client keeps a separate history for each in `client.message_registry`:
+
+1. **Submission** -- the gateway answers `submit_sm` with `submit_sm_resp`. On success the response carries the gateway-assigned `message_id`.
+2. **Delivery** -- the gateway later sends `deliver_sm` delivery receipts (intermediate, terminal and late ones) referencing that same `message_id`.
+
+Correlation always uses the gateway-assigned `message_id`, never the PDU sequence number. Sequence numbers restart on every connection and are only used to match a `submit_sm_resp` to its `submit_sm` on the same connection; they are reset on (re)connect, so a reused sequence can never be linked to a message from a previous connection.
+
+```python
+record = client.message_registry.get_record(b'1d305b4c')
+
+record.is_submitted      # True once the gateway accepted the message
+record.is_delivered      # True once a DELIVERED receipt arrived
+record.is_terminal       # True for delivered/expired/deleted/undeliverable/rejected
+record.message_state     # state from the latest delivery receipt
+record.submit_events     # full phase-one history (never rewritten)
+record.delivery_events   # full phase-two history, including late receipts
+```
+
+Both legacy text receipts (`id:... stat:DELIVRD ...`, including the vendor `rid:` spelling) and the SMPP 3.4 `receipted_message_id` / `message_state` optional parameters are understood. A failed delivery receipt is appended to the history but never changes the fact that the gateway previously accepted the message; receipts for an unknown `message_id` create a standalone record instead of being attached to an unrelated message.
+
 The client supports setting a custom generator that produces sequence numbers for the PDU packages. Per default a simple in memory generator is used which in conclusion is reset on (re)instantiation of the client, e.g. by an application restart. If you want to keep the sequence number to be persisted across restarts you can implement your own storage backed generator.
 
 Example:

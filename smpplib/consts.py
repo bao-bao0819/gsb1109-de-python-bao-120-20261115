@@ -185,6 +185,10 @@ SMPP_MSGTYPE_DEFAULT = 0x00  # Default message type (i.e. normal message)
 SMPP_MSGTYPE_DELIVERYACK = 0x08  # Message containts ESME Delivery acknowledgement
 SMPP_MSGTYPE_USERACK = 0x10  # Message containts ESME Manual/User acknowledgement
 
+# `esm_class` Message Type sub-field (bits 5-2), SMPP 3.4 section 5.2.12.
+SMPP_MSG_TYPE_MASK = 0x3C
+SMPP_MSGTYPE_SMSC_DELIVERY_RECEIPT = 0x04  # SMSC delivery receipt in a deliver_sm
+
 
 SMPP_GSMFEAT_NONE = 0x00  # No specific features selected
 SMPP_GSMFEAT_UDHI = 0x40  # UDHI Indicator (only relevant for MT msgs)

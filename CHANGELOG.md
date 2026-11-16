@@ -1,3 +1,10 @@
+### Unreleased
+
+* New: two-phase message state registry (`client.message_registry`) tracking gateway submission (`submit_sm_resp`) and terminal delivery receipts (`deliver_sm`) as separate, append-only histories
+* New: correlation by the gateway-assigned `message_id` only; per-connection sequence numbers are reset on connect and can never link a receipt to a message from another connection
+* New: parsing of legacy textual SMSC delivery receipts (including the vendor `rid:` spelling) alongside `receipted_message_id` / `message_state` optional parameters
+* A failed or late delivery receipt no longer overwrites a previously recorded successful submission
+
 ### `2.2.1`
 
 * Fix: split message detection #182 #184 (@fpalamour)
