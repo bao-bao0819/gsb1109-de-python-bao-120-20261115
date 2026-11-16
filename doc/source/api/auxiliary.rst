@@ -13,6 +13,15 @@ Math
   minimizes the sum of squares of (perpendicular) distances between the points and the line.
 
 
+Peak matching
+-------------
+
+  :py:class:`Tolerance` - absolute (Da) and relative (ppm) m/z error rule.
+
+  :py:func:`match_peaks` - order-independent one-to-one matching of two peak
+  lists, retaining unmatched peaks.
+
+
 Target-Decoy Approach
 ---------------------
 
@@ -53,6 +62,8 @@ Helpers
 
 
 .. automodule :: pyteomics.auxiliary.math
+
+.. automodule :: pyteomics.auxiliary.peak_matching
 
 .. automodule :: pyteomics.auxiliary.target_decoy
 

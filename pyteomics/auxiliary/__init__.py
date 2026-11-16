@@ -18,6 +18,8 @@ from .math import (
     linear_regression, linear_regression_perpendicular,
     linear_regression_vertical)
 
+from .peak_matching import Tolerance, match_peaks
+
 from .target_decoy import (
     _calculate_qvalues, _qvalues_df, _decoy_or_pep_label,
     _construct_dtype, _make_qvalues, _make_filter,
