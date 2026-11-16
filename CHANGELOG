@@ -1,6 +1,13 @@
 5.0.3a1
 -------
 
+ - Add :py:mod:`mzmlwarehouse`, a module that ingests mzML binary arrays
+   (compressed or not, and of varying byte order and precision) into
+   spectrum-identified array groups. m/z and intensity arrays are paired
+   by their semantic declarations, original encoding evidence is
+   preserved, length conflicts are reported without truncating arrays,
+   and unknown encodings are kept as the original payload instead of
+   being decoded into seemingly valid zero-filled arrays.
  - Fix :py:mod:`ms1` and :py:mod:`ms2` to ensure array alignment (`#228 <https://github.com/levitsky/pyteomics/pull/228>`_ by KBS).
  - Speed up :py:func:`parser.coverage_mask` (`#229 <https://github.com/levitsky/pyteomics/pull/229>`_ by Bharat Kaurav).
 

@@ -19,6 +19,7 @@ Contents:
    api/mzml
    api/mzxml
    api/mzmlb
+   api/mzmlwarehouse
    api/mgf
    api/ms1
    api/ms2
