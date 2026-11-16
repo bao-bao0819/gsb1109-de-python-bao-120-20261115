@@ -362,6 +362,28 @@ class MzML(aux.BinaryArrayConversionMixin, xml.CVParamParser, aux.TimeOrderedInd
     def _get_time(scan):
         return scan['scanList']['scan'][0]['scan start time']
 
+    @property
+    @xml._keepstate
+    def start_time_stamp(self):
+        """Absolute acquisition time of the run (``<run startTimeStamp=...>``).
+
+        Returns the raw xsd:dateTime string (e.g. ``'2005-07-20T14:44:22'``),
+        or :py:const:`None` when the attribute is absent. This is a wall-clock
+        time stamp identifying when acquisition started; unlike the per-scan
+        ``'scan start time'`` durations it is not an elapsed time and must not
+        be treated as a retention time or merged into a scan time axis.
+        """
+        # Only the opening <run> tag is needed, so stream start events and
+        # stop there instead of materializing the whole (potentially huge) run.
+        for _, elem in etree.iterparse(
+                self._source, events=('start',),
+                remove_comments=True, huge_tree=self._huge_tree):
+            if xml._local_name(elem) == 'run':
+                stamp = elem.get('startTimeStamp')
+                elem.clear()
+                return stamp
+        return None
+
 
 def read(source, read_schema=False, iterative=True, use_index=False, dtype=None, huge_tree=False, decode_binary=True, cv=None):
     """Parse `source` and iterate through spectra.

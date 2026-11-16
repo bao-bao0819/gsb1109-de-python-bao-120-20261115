@@ -49,6 +49,17 @@ Helpers
 
   :py:func:`set_start_method` - set the method of starting multiprocessing workers.
 
+  :py:func:`convert_time_unit` - convert an annotated time quantity
+  (:class:`unitfloat`) between exact units using its declared unit only.
+
+  :py:func:`to_minutes` - convert an annotated time quantity to minutes.
+
+  :py:func:`retention_time_report` - produce a per-scan retention time table
+  with one exact unit, retaining the original declaration and scan order.
+
+  :py:class:`TimeUnitError` - raised when a time unit is missing or unknown
+  instead of guessing it from the value.
+
 -------------------------------------------------------------------------------
 
 

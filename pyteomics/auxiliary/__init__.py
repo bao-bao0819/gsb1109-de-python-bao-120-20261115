@@ -2,6 +2,7 @@ from .structures import (
     PyteomicsError, Charge, ChargeList,
     _parse_charge, _parse_ion, BasicComposition,
     unitfloat, unitint, unitstr, cvstr,
+    TimeUnitError, convert_time_unit, to_minutes, retention_time_report,
     cvquery)
 
 from .constants import _nist_mass

@@ -144,6 +144,40 @@ class MzmlTest(unittest.TestCase):
                 self.assertEqual(scan_time.unit_info, 'minute')
                 self.assertEqual(scan_window_lower_limit.unit_info, 'm/z')
 
+    def test_mixed_time_units_normalized_to_one_unit(self):
+        # tiny.pwiz.1.1.mzML declares scan start times in both minutes and seconds
+        with MzML('tiny.pwiz.1.1.mzML') as handle:
+            report = aux.retention_time_report(handle, unit='minute')
+        declared_units = [
+            None if row['declared_time'] is None else row['declared_time'].unit_info
+            for row in report]
+        self.assertEqual(declared_units, ['minute', 'minute', None, 'second'])
+        # every converted value carries the same exact target unit
+        converted = [row for row in report if row['time'] is not None]
+        self.assertTrue(all(row['time'].unit_info == 'minute' for row in converted))
+        # second-based value converted by its declared unit, not by magnitude
+        self.assertAlmostEqual(float(report[3]['time']), 42.05 / 60.0)
+        # minute-based values are unchanged numerically
+        self.assertAlmostEqual(float(report[0]['time']), 5.8905)
+        # the scan with no recorded time is still emitted, with a warning
+        self.assertIsNone(report[2]['time'])
+        self.assertIsNotNone(report[2]['warning'])
+        # scan order and identifiers are preserved
+        self.assertEqual([row['order'] for row in report], [0, 1, 2, 3])
+        self.assertEqual(report[3]['scan_id'],
+                         'sample=1 period=1 cycle=22 experiment=1')
+
+    def test_acquisition_timestamp_distinct_from_scan_durations(self):
+        with MzML('tiny.pwiz.1.1.mzML') as handle:
+            stamp = handle.start_time_stamp
+            scan = next(handle)
+            scan_time = scan['scanList']['scan'][0]['scan start time']
+        # absolute wall-clock acquisition time vs. relative per-scan duration
+        self.assertEqual(stamp, '2007-06-27T15:23:45.00035')
+        self.assertIsInstance(stamp, str)
+        self.assertNotIn('T', str(scan_time))
+        self.assertEqual(scan_time.unit_info, 'minute')
+
     def test_cv_query(self):
         with MzML(self.path) as handle:
             scan = next(handle)

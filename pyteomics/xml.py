@@ -124,12 +124,14 @@ class XMLValueConverter(object):
 
     @classmethod
     def duration_str_to_float(cls, s):
-        # Not a duration, so pass along
+        # Not a duration, so pass along. A bare number carries no declared
+        # unit, so unit_info is left None rather than inventing one: the unit
+        # must not be guessed from the magnitude of the value.
         if not s.startswith('P'):
             try:
-                return unitfloat(s, 'duration')
+                return unitfloat(s, None)
             except ValueError:
-                return unitstr(s, 'duration')
+                return unitstr(s, None)
         match = cls._duration_parser.search(s)
         if match:
             matchdict = match.groupdict()
@@ -140,7 +142,7 @@ class XMLValueConverter(object):
             minutes += (seconds / 60.)
             return unitfloat(minutes, 'minute')
         else:
-            return unitstr(s, 'duration')
+            return unitstr(s, None)
 
     @classmethod
     def str_to_bool(cls, s):

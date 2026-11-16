@@ -370,6 +370,238 @@ class unitstr(str):
         p.text(string)
 
 
+# Multipliers converting a quantity expressed in the named unit into seconds.
+# Only units explicitly declared in the parsed data are listed; a missing unit
+# is never guessed from the magnitude of the number.
+_TIME_UNITS_TO_SECONDS = {
+    'millisecond': 1e-3,
+    'milliseconds': 1e-3,
+    'second': 1.0,
+    'seconds': 1.0,
+    'sec': 1.0,
+    's': 1.0,
+    'minute': 60.0,
+    'minutes': 60.0,
+    'min': 60.0,
+    'hour': 3600.0,
+    'hours': 3600.0,
+    'h': 3600.0,
+    'day': 86400.0,
+    'days': 86400.0,
+    'd': 86400.0,
+}
+
+# Canonical spellings reported after a conversion.
+_TIME_UNIT_ALIASES = {
+    'millisecond': 'millisecond', 'milliseconds': 'millisecond',
+    'second': 'second', 'seconds': 'second', 'sec': 'second', 's': 'second',
+    'minute': 'minute', 'minutes': 'minute', 'min': 'minute',
+    'hour': 'hour', 'hours': 'hour', 'h': 'hour',
+    'day': 'day', 'days': 'day', 'd': 'day',
+}
+
+
+class TimeUnitError(PyteomicsError):
+    """Raised when a time quantity cannot be converted because its unit is
+    missing or not recognized. The unit is never guessed from the value."""
+
+
+def _canonical_time_unit(unit):
+    if unit is None:
+        return None
+    return _TIME_UNIT_ALIASES.get(str(unit).strip().lower())
+
+
+def convert_time_unit(value, unit=None):
+    """Convert a time quantity to an explicitly requested unit.
+
+    The conversion relies solely on the declared unit (the ``unit_info``
+    attribute of a :class:`unitfloat`, or the `unit` argument). A value without
+    a declared unit is never interpreted by its numeric magnitude.
+
+    Parameters
+    ----------
+    value : unitfloat or float
+        The time value. If it carries ``unit_info``, that declaration is the
+        source unit.
+    unit : str, optional
+        Target unit name, e.g. ``'minute'``. If :py:const:`None`, the value is
+        re-wrapped with its declared unit without rescaling.
+
+    Returns
+    -------
+    unitfloat
+        The converted value, annotated with the canonical target unit name.
+
+    Raises
+    ------
+    TimeUnitError
+        If no unit is declared, the declared unit is not recognized, or the
+        requested target unit is unknown.
+    """
+    if unit is None:
+        target = None
+    elif isinstance(unit, str):
+        target = _canonical_time_unit(unit)
+        if target is None:
+            raise TimeUnitError('Unknown target time unit: {!r}'.format(unit))
+    else:
+        raise TimeUnitError('Unsupported time unit specification: {!r}'.format(unit))
+
+    declared = getattr(value, 'unit_info', None)
+    source = _canonical_time_unit(declared)
+    if declared is not None and source is None:
+        raise TimeUnitError('Unrecognized declared time unit: {!r}'.format(declared))
+    if source is None:
+        raise TimeUnitError(
+            'No time unit declared for {!r}; refusing to guess one.'.format(value))
+
+    if target is None:
+        return unitfloat(float(value), source)
+    if target == source:
+        return unitfloat(float(value), target)
+    seconds = float(value) * _TIME_UNITS_TO_SECONDS[source]
+    return unitfloat(seconds / _TIME_UNITS_TO_SECONDS[target], target)
+
+
+def to_minutes(value):
+    """Convert an annotated time quantity to minutes.
+
+    Convenience wrapper around :func:`convert_time_unit`. Values without a
+    declared unit raise :class:`TimeUnitError` instead of being interpreted
+    from their numeric size.
+    """
+    return convert_time_unit(value, 'minute')
+
+
+def _scan_identifier(scan):
+    scan_id = scan.get('id')
+    if scan_id is None and isinstance(scan.get('params'), dict):
+        scan_id = scan['params'].get('title')
+    return scan_id
+
+
+class _NullContext(object):
+    def __init__(self, obj):
+        self._obj = obj
+
+    def __enter__(self):
+        return self._obj
+
+    def __exit__(self, *args):
+        return False
+
+
+def retention_time_report(reader, unit='minute', source_name=None):
+    """Report each scan's retention time with a single exact unit.
+
+    Every scan produced by `reader` gets its own row, in iteration order, so
+    repeated time values remain distinct scans. The originally parsed value
+    (with its declared unit) is preserved alongside the converted value.
+
+    Times are converted using declared units only; when a unit is missing or
+    unknown the converted value is reported as :py:const:`None` with an
+    explanatory warning instead of being guessed from the number's magnitude.
+
+    Each reader is treated as its own segment: rows are tagged with
+    `source_name` and times are never offset or stitched together, so a restart
+    cannot produce a fake continuous time axis. Pass several readers (or a
+    :class:`~pyteomics.auxiliary.ChainBase`) to get concatenated per-source
+    rows without any rescaling of the time values.
+
+    Parameters
+    ----------
+    reader : time-ordered reader or iterable of such readers
+        An object exposing ``_get_time(scan)`` and iteration over scans, e.g.
+        :class:`~pyteomics.mzml.MzML`, :class:`~pyteomics.mzxml.MzXML` or
+        :class:`~pyteomics.mgf.IndexedMGF`.
+    unit : str, optional
+        Target unit for the ``'time'`` column. Defaults to ``'minute'``.
+    source_name : str, optional
+        Label stored in the ``'source'`` column. Defaults to the reader's
+        file name when available.
+
+    Returns
+    -------
+    list of dict
+        One dict per scan, with keys:
+
+        - ``'source'``: reader/file identifier;
+        - ``'order'``: zero-based position within this source's iteration;
+        - ``'scan_id'``: native scan identifier (``'id'`` or MGF title);
+        - ``'declared_time'``: the original time quantity as parsed, unit intact;
+        - ``'time'``: converted :class:`unitfloat`, or :py:const:`None`;
+        - ``'unit'``: target unit name;
+        - ``'warning'``: conversion problem description, otherwise :py:const:`None`.
+    """
+    if not hasattr(reader, '_get_time'):
+        # A chained reader exposes its source files through ``sources`` and a
+        # ``_create_sequence`` factory; a bare iterable of open readers is also
+        # accepted. Either way each segment keeps its own time axis and
+        # nothing is offset or stitched together.
+        sources = getattr(reader, 'sources', None)
+        if sources is None:
+            segments = list(reader)
+            for segment in segments:
+                if not hasattr(segment, '_get_time'):
+                    raise TimeUnitError(
+                        'Cannot extract retention times from {!r}'.format(segment))
+        else:
+            segments = []
+            for source in sources:
+                if hasattr(source, '_get_time'):
+                    segments.append(source)
+                elif hasattr(reader, '_create_sequence'):
+                    segments.append(reader._create_sequence(source))
+                else:
+                    raise TimeUnitError(
+                        'Cannot open source {!r} for retention time extraction'.format(source))
+
+        rows = []
+        for segment in segments:
+            name = source_name
+            if name is None:
+                name = getattr(segment, 'name', None) or getattr(
+                    segment, '_source_init', None)
+            context = segment if hasattr(segment, '__enter__') else _NullContext(segment)
+            with context as opened:
+                rows.extend(retention_time_report(
+                    opened, unit=unit, source_name=name))
+        return rows
+
+    if source_name is None:
+        source_name = getattr(reader, 'name', None) or getattr(
+            reader, '_source_init', None)
+
+    rows = []
+    for order, scan in enumerate(reader):
+        warning = None
+        declared = None
+        try:
+            declared = reader._get_time(scan)
+        except (PyteomicsError, KeyError, IndexError):
+            warning = 'No retention time recorded for this scan.'
+
+        converted = None
+        if declared is not None:
+            try:
+                converted = convert_time_unit(declared, unit)
+            except TimeUnitError as err:
+                warning = err.message
+            except (TypeError, ValueError):
+                warning = 'Unparseable retention time: {!r}.'.format(declared)
+        rows.append({
+            'source': source_name,
+            'order': order,
+            'scan_id': _scan_identifier(scan),
+            'declared_time': declared,
+            'time': converted,
+            'unit': unit,
+            'warning': warning,
+        })
+    return rows
+
+
 class cvstr(str):
     '''A helper class to associate a controlled vocabullary accession
     number with an otherwise plain :class:`str` object

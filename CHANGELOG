@@ -3,6 +3,15 @@
 
  - Fix :py:mod:`ms1` and :py:mod:`ms2` to ensure array alignment (`#228 <https://github.com/levitsky/pyteomics/pull/228>`_ by KBS).
  - Speed up :py:func:`parser.coverage_mask` (`#229 <https://github.com/levitsky/pyteomics/pull/229>`_ by Bharat Kaurav).
+ - Add :py:func:`auxiliary.convert_time_unit`, :py:func:`auxiliary.to_minutes` and
+   :py:func:`auxiliary.retention_time_report` to normalize retention times to one exact
+   unit using declared units only (missing units raise :py:class:`auxiliary.TimeUnitError`
+   instead of being guessed from the value), preserving scan order and keeping separate
+   readers' time axes un-stitched.
+ - Add :py:attr:`mzml.MzML.start_time_stamp` for the absolute run acquisition time stamp,
+   distinct from per-scan elapsed scan times.
+ - Stop fabricating a ``'duration'`` unit for non-duration scalar values in the XML
+   value converter; such values now carry no unit until one is declared.
 
 
 5.0.2
