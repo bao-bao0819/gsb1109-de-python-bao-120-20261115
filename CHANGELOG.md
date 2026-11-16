@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]
 
+### Added
+- `ResumableReader` for incremental reading of an interchange across disconnects: messages are committed
+  only when the UNT segment count and message reference check out, `last_complete_message` and
+  `unconfirmed_tail` report the resume position, a missing UNZ records the batch as `unclosed` on
+  `finish()`, and resending the unconfirmed tail via `resume()` never rewrites committed messages
+
 ### Fixed
 - Honor `break_lines=True` after the UNA header when serializing an empty segment list.
 

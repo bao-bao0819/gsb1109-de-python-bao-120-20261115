@@ -7,6 +7,11 @@ Parser
 .. automodule:: pydifact.parser
     :members:
 
+ResumableReader
+---------------
+.. automodule:: pydifact.resume
+    :members:
+
 Segments
 --------
 .. automodule:: pydifact.segments

@@ -25,6 +25,7 @@ __version__ = "0.3.0"
 
 from .control.characters import Characters
 from .parser import Parser
+from .resume import ResumableReader
 from .segments import Segment
 from .serializer import Serializer
 from .syntax import v1, v2, v3, v4  # noqa: F401 - registers the typed service segments
@@ -35,6 +36,7 @@ __all__ = [
     "__version__",
     "Characters",
     "Parser",
+    "ResumableReader",
     "Segment",
     "Serializer",
     "serializer",
