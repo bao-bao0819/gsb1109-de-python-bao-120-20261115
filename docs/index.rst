@@ -26,6 +26,7 @@ if you need to generate your own OFX-formatted data... ``ofxtools`` is for you!
    generating
    sqlalchemy
    utils
+   lots
    contributing
    resources
 
