@@ -54,6 +54,11 @@ It targets compliance with the `OFX specification`_, specifically OFX versions
     * Section 13 (investments)
     * OFX tax extensions (1099 forms)
 
+The :mod:`ofxtools.lending` module additionally reconciles securities on loan
+against an explicit lending/return table, keeping partial returns, early
+recalls and corporate actions as separate batches and reporting unlinked OFX
+records as undetermined.
+
 This should cover the great majority of real-world OFX use cases.  A particular
 focus of ``ofxtools`` is full support of the OFX investment message set,
 which has been somewhat neglected by the Python community.
