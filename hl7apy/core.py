@@ -146,21 +146,155 @@ class ElementProxy(Sequence):
     True
     >>> print(isinstance(m.msh.msh_7, ElementProxy))
     True
+
+    Reading through a proxy never changes the element tree: paths that have not been
+    populated yet are resolved against a detached prototype. The corresponding children
+    are created only when the proxy is used to write.
     """
 
-    cls_attrs = ('element_list', 'list', 'element_name')
+    cls_attrs = ('element_list', 'list', 'element_name', '_virtual_anchor', '_virtual_path')
 
-    def __init__(self, element_list, element_name):
+    def __init__(self, element_list, element_name, virtual_anchor=None, virtual_path=None):
         self.element_name = element_name.upper()
         self.element_list = element_list
+        if virtual_anchor is None:
+            self._virtual_anchor = None
+            self._virtual_path = None
+        else:
+            self._virtual_anchor = virtual_anchor
+            self._virtual_path = tuple(virtual_path)
+
+    @property
+    def _is_virtual(self):
+        return self.__dict__.get('_virtual_anchor') is not None
+
+    @staticmethod
+    def _child_named(element, name):
+        for index in (element.children.indexes, element.children.traversal_indexes):
+            children = index.get(name)
+            if children:
+                return children[0]
+        return None
+
+    def _anchor(self):
+        if self._is_virtual:
+            return self._virtual_anchor, self._virtual_path
+        return self.element_list.element, (self.element_name,)
+
+    @staticmethod
+    def _resolve_from(element, names):
+        for name in names:
+            element = ElementProxy._child_named(element, name)
+            if element is None:
+                return None
+        return element
 
     @property
     def list(self):
-        return self.element_list.indexes.get(self.element_name, [])
+        if not self._is_virtual:
+            return self.element_list.indexes.get(self.element_name, [])
+        anchor, path = self._anchor()
+        parent = self._resolve_from(anchor, path[:-1])
+        if parent is None:
+            return []
+        return parent.children.indexes.get(self.element_name, [])
 
     @property
     def traversal_list(self):
-        return self.element_list.traversal_indexes.get(self.element_name, [])
+        if not self._is_virtual:
+            return self.element_list.traversal_indexes.get(self.element_name, [])
+        anchor, path = self._anchor()
+        parent = self._resolve_from(anchor, path[:-1])
+        if parent is None:
+            return []
+        return parent.children.traversal_indexes.get(self.element_name, [])
+
+    def _peek_element(self):
+        """
+        Return the concrete child currently present for this proxy, without creating anything.
+        """
+        anchor, path = self._anchor()
+        return self._resolve_from(anchor, path)
+
+    @staticmethod
+    def _materialize_path(anchor, path):
+        parent = anchor
+        for index, name in enumerate(path):
+            child = ElementProxy._child_named(parent, name)
+            if child is None:
+                child = parent.children.create_element(
+                    name,
+                    traversal_parent=True,
+                    creation_rule={
+                        'kind': 'traversal',
+                        'parent': parent.name,
+                        'requested_name': name,
+                        'path': '.'.join(path[: index + 1]),
+                    },
+                )
+            parent = child
+        return parent
+
+    def _materialize_element(self):
+        """
+        Return the concrete child for this proxy, creating it (and its missing ancestors) with
+        the regular traversal rules only when a write requires it.
+        """
+        anchor, path = self._anchor()
+        return self._materialize_path(anchor, path)
+
+    def _detached_path(self):
+        """
+        Build a detached element chain following the virtual path, without touching the tree.
+        Each prototype records its absolute traversal path in ``creation_rule``.
+        """
+        anchor, path = self._anchor()
+        parent = anchor
+        for index, name in enumerate(path):
+            child = self._child_named(parent, name)
+            if child is None:
+                child = parent.children.create_element(
+                    name,
+                    attach=False,
+                    creation_rule={
+                        'kind': 'probe',
+                        'parent': parent.name,
+                        'requested_name': name,
+                        'path': '.'.join(path[: index + 1]),
+                    },
+                )
+            parent = child
+        return parent
+
+    def _wrap_result(self, result):
+        """
+        Re-anchor a proxy obtained from a detached prototype to the real tree.
+        """
+        if result._is_virtual:
+            return result
+        node = result.element_list.element
+        chain = []
+        seen = set()
+        while node is not None and id(node) not in seen:
+            rule = getattr(node, 'creation_rule', None) or {}
+            if rule.get('kind') != 'probe':
+                break
+            seen.add(id(node))
+            chain.append(node.name)
+            node = node.parent
+        if node is None:
+            return result
+        path = tuple(reversed(chain)) + (result.element_name,)
+        return ElementProxy(self.element_list, result.element_name, node, path)
+
+    def _container(self):
+        """
+        Return the ElementList that owns the children addressed by this proxy.
+        """
+        if not self._is_virtual:
+            return self.element_list
+        anchor, path = self._anchor()
+        return self._materialize_path(anchor, path[:-1]).children
 
     def __len__(self):
         return len(self.list)
@@ -172,41 +306,41 @@ class ElementProxy(Sequence):
             return super().__iter__()
 
     def __getattr__(self, name):
-        try:
-            element = self.list[0]
-        except IndexError:  # first child not found, create the element
-            try:
-                element = self.traversal_list[0]
-            except IndexError:
-                element = self.element_list.create_element(self.element_name, traversal_parent=True)
-        return getattr(element, name)
+        if name.startswith('__') and name.endswith('__'):
+            raise AttributeError(name)
+        element = self._peek_element()
+        if element is not None:
+            return getattr(element, name)
+
+        prototype = self._detached_path()
+        result = getattr(prototype, name)
+        if isinstance(result, ElementProxy):
+            return self._wrap_result(result)
+        return result
 
     def __setattr__(self, name, value):
         if name in self.cls_attrs:
             super().__setattr__(name, value)
         else:
-            try:
-                element = self.list[0]
-            except IndexError:  # first child not found, create the element
-                try:
-                    element = self.traversal_list[0]
-                except IndexError:
-                    element = self.element_list.create_element(self.element_name, traversal_parent=True)
+            element = self._materialize_element()
             if name == 'value':
                 element.set_parent_to_traversal()
             setattr(element, name, value)
 
     def __setitem__(self, index, value):
-        self.element_list.set(self.element_name, value, index)
+        self._container().set(self.element_name, value, index)
 
     def __getitem__(self, index):
         return self.list[index]
 
     def __delitem__(self, index):
-        self.element_list.remove(self.list[index])
+        self._container().remove(self.list[index])
 
     def __delattr__(self, name):
-        delattr(self.list[0], name)
+        element = self._peek_element()
+        if element is None:
+            raise AttributeError(name)
+        delattr(element, name)
 
     def __repr__(self):
         return repr(self.list)
@@ -274,6 +408,15 @@ class ElementList(MutableSequence):
         :param child: an instance of an :class:`Element <hl7apy.core.Element>` subclass
         """
         if self._can_add_child(child):
+            if child.creation_rule is None:
+                child.creation_rule = {
+                    'kind': 'attached',
+                    'parent': self.element.name,
+                    'requested_name': child.name,
+                    'element_name': child.name,
+                    'element_class': child.classname,
+                    'path': child.creation_path,
+                }
             if self.element == child.parent:
                 self._remove_from_traversal_index(child)
                 self.list.append(child)
@@ -326,7 +469,21 @@ class ElementList(MutableSequence):
         reference = None if name is None else self.element.find_child_reference(name)
         child_ref, child_name = (None, None) if reference is None else (reference['ref'], reference['name'])
 
-        if isinstance(value, (str, bytes)):  # if the value is a str or bytes, parse it
+        explicit_empty = value is None or (isinstance(value, (str, bytes)) and not value)
+        if explicit_empty:
+            # An explicit empty value keeps the child (and creates it if needed) without content
+            child = self.create_element(
+                name,
+                False,
+                reference,
+                creation_rule={
+                    'kind': 'set',
+                    'parent': self.element.name,
+                    'requested_name': child_name,
+                    'explicit_empty': True,
+                },
+            )
+        elif isinstance(value, (str, bytes)):  # if the value is a str or bytes, parse it
             child = self.element.parse_child(value, child_name=child_name, reference=child_ref)
         elif isinstance(value, Element):  # it is already an instance of Element
             child = value
@@ -335,6 +492,20 @@ class ElementList(MutableSequence):
             child.value = value
         else:
             raise ChildNotValid(value, child_name)
+
+        if getattr(child, 'creation_rule', None) is None:
+            parent_rule = getattr(self.element, 'creation_rule', None) or {}
+            parent_path = parent_rule.get('path') or self.element.name
+            child.creation_rule = {
+                'kind': 'set',
+                'parent': self.element.name,
+                'requested_name': child_name,
+                'element_name': child.name,
+                'element_class': child.classname,
+                'path': '{0}.{1}'.format(parent_path, child.name) if parent_path else child.name,
+            }
+        if explicit_empty:
+            child.creation_rule['explicit_empty'] = True
 
         if child.name != child_name:  # e.g. message.pid = Segment('SPM') is forbidden
             raise ChildNotValid(value, child_name)
@@ -421,7 +592,7 @@ class ElementList(MutableSequence):
             self.remove(old_child)
             self.insert(list_index, new_child, by_name_index)
 
-    def create_element(self, name, traversal_parent=False, reference=None):
+    def create_element(self, name, traversal_parent=False, reference=None, attach=True, creation_rule=None):
         """
         Create an element having the given name
 
@@ -432,6 +603,13 @@ class ElementList(MutableSequence):
         :param traversal_parent: if ``True``, the parent will be set as temporary for traversal purposes
 
         :param reference: the new element structure (see :func:`load_reference <hl7apy.load_reference>`)
+
+        :type attach: ``bool``
+        :param attach: if ``False``, the element is a detached prototype used to resolve read-only
+            traversal queries; it is not added to the tree
+
+        :param creation_rule: a ``dict`` describing why the element has been created by the traversal.
+            It is stored on the element as :attr:`Element.creation_rule`
 
         :return: an instance of an :class:`hl7apy.core.Element` subclass
 
@@ -447,11 +625,36 @@ class ElementList(MutableSequence):
                 'validation_level': self.element.validation_level,
                 'version': self.element.version,
             }
-            if not traversal_parent:
+            if not attach:
+                rule = creation_rule or {
+                    'kind': 'probe',
+                    'parent': self.element.name,
+                    'requested_name': element_name,
+                }
+            elif not traversal_parent:
                 kwargs['parent'] = self.element
+                rule = creation_rule or {
+                    'kind': 'explicit',
+                    'parent': self.element.name,
+                    'requested_name': element_name,
+                }
             else:
                 kwargs['traversal_parent'] = self.element
-            return cls(element_name, **kwargs)
+                rule = creation_rule or {
+                    'kind': 'traversal',
+                    'parent': self.element.name,
+                    'requested_name': element_name,
+                }
+            element = cls(element_name, **kwargs)
+            if not attach:
+                # Link the prototype to its container for introspection, without registering it
+                element._parent = self.element
+            path = element.creation_path
+            if not path:
+                parent_path = self.element.creation_path
+                path = '{0}.{1}'.format(parent_path, element_name) if parent_path else element_name
+            element.creation_rule = dict(rule, element_name=element_name, element_class=cls.__name__, path=path)
+            return element
         else:
             raise ChildNotFound(name)
 
@@ -616,6 +819,12 @@ class ElementFinder:
             data['datatype'] = datatype
             data['table'] = table
             data['long_name'] = long_name
+        data['reference_source'] = {
+            'content_type': content_type,
+            'name': element.name,
+            'element_class': element.classname,
+            'version': element.version,
+        }
         return data
 
 
@@ -644,11 +853,21 @@ class Element:
         'structure_by_longname',
         'repetitions',
         'reference',
+        'reference_source',
+        'creation_rule',
+        '_creation_rule',
         '_truncation_char',
     ]
 
     def __init__(
-        self, name=None, parent=None, reference=None, version=None, validation_level=None, traversal_parent=None
+        self,
+        name=None,
+        parent=None,
+        reference=None,
+        version=None,
+        validation_level=None,
+        traversal_parent=None,
+        creation_rule=None,
     ):
 
         if self.__class__ == Element:
@@ -666,6 +885,7 @@ class Element:
         self.validation_level = validation_level
         self.name = name.upper() if name is not None else None
         self.version = version
+        self.creation_rule = creation_rule
         self.table = None
         self.long_name = None
         self.children = ElementList(self)
@@ -673,6 +893,7 @@ class Element:
         self.structure_by_longname = None
         self.ordered_children = None
         self.repetitions = {}
+        self.reference_source = None
         self._find_structure(reference)
         self.parent = parent
         if parent is None:
@@ -810,6 +1031,12 @@ class Element:
     traversal_parent = property(_get_traversal_parent, _set_traversal_parent)
 
     def _set_value(self, value):
+        if value is None or (isinstance(value, (str, bytes)) and not value):
+            # An explicit empty assignment keeps the element but clears its content
+            self.children = ElementList(self)
+            if self.creation_rule is not None:
+                self.creation_rule['explicit_empty'] = True
+            return
         self.children = self.parse_children(value)
 
     def _get_value(self):
@@ -823,6 +1050,33 @@ class Element:
         The name of the class
         """
         return self.__class__.__name__
+
+    def _get_creation_rule(self):
+        rule = self._creation_rule
+        if rule is not None:
+            # the path is computed on access: children are often attached before their ancestors
+            rule['path'] = self.creation_path
+        return rule
+
+    def _set_creation_rule(self, rule):
+        self._creation_rule = rule
+
+    creation_rule = property(_get_creation_rule, _set_creation_rule)
+
+    @property
+    def creation_path(self):
+        """
+        The dotted path from the tree root to this element (root excluded).
+        Unknown elements contribute their class name instead of ``None``.
+        """
+        names = []
+        node = self
+        seen = set()
+        while node is not None and id(node) not in seen:
+            seen.add(id(node))
+            names.append(node.name if node.name is not None else node.classname)
+            node = node.parent if node.parent is not None else node.traversal_parent
+        return '.'.join(reversed(names[:-1]))
 
     @property
     def encoding_chars(self):
@@ -876,6 +1130,8 @@ class Element:
         raise NotImplementedError
 
     def __getattr__(self, name):
+        if name.startswith('__') and name.endswith('__'):
+            raise AttributeError(name)
         if hasattr(self, 'children') and name not in self.cls_attrs:
             return self.children.get(name)
         else:

@@ -385,18 +385,17 @@ class TestMessage(unittest.TestCase):
         g = m.rsp_k21_query_response
         self.assertEqual(id(m.rsp_k21_query_response), id(g))  # test that the ElementProxy is the same
 
-        # tests the creation of traversal_indexes item
+        # reads must not create traversal entries
         pid1 = m.rsp_k21_query_response.pid
-        self.assertIn("RSP_K21_QUERY_RESPONSE", m.children.traversal_indexes)
+        self.assertNotIn("RSP_K21_QUERY_RESPONSE", m.children.traversal_indexes)
+        self.assertNotIn("PID", g.children.traversal_indexes)
 
         pid2 = m.rsp_k21_query_response.pid
         pid1.value = 'PID|a|b|'
         # tests that assigning a child to one occurrence affect also the others
         self.assertEqual(pid1.children, pid2.children)
         self.assertEqual(pid1.children, m.rsp_k21_query_response.pid.children)
-        self.assertNotIn("RSP_K21_QUERY_RESPONSE", m.children.traversal_indexes)
-
-        m.rsp_k21_query_response.pid.pid_3.cx_10.cwe_1
+        self.assertIn("RSP_K21_QUERY_RESPONSE", m.children.indexes)
 
     def test_create_v27_message(self):
         m = Message('RSP_K21', version='2.7')
@@ -410,6 +409,128 @@ class TestMessage(unittest.TestCase):
 
     def test_legacy_message_profile(self):
         self.assertRaises(LegacyMessageProfile, Message, 'RAS_O17', reference=self.legacy_mp)
+
+    def _get_read_only_message(self):
+        m = Message('ADT_A01')
+        m.msh.msh_3 = 'GHH'
+        m.msh.msh_9 = 'ADT^A01'
+        m.msh.msh_10 = '1'
+        m.msh.msh_11 = 'P'
+        m.evn.evn_2 = '20080115153000'
+        m.pv1.pv1_1 = '1'
+        return m
+
+    def test_read_only_traversal_does_not_create_children(self):
+        m = self._get_read_only_message()
+        before = m.to_er7()
+
+        for path in ('pid', 'pid.pid_5', 'pid.pid_5.pid_5_1', 'pid.pid_3.cx_1'):
+            element = m
+            for part in path.split('.'):
+                element = getattr(element, part)
+            element.value
+            element.name
+            element.to_er7()
+
+        self.assertEqual(m.children.traversal_indexes, {})
+        self.assertEqual(m.pid.list, [])
+        self.assertEqual(m.to_er7(), before)
+
+    def test_read_only_traversal_is_stable_after_writes(self):
+        m = self._get_read_only_message()
+        pid_5_1 = m.pid.pid_5.pid_5_1
+        m.pid.pid_5.pid_5_2 = 'ADAM'
+        self.assertEqual(pid_5_1.value, '')
+        self.assertEqual(m.pid.pid_5.pid_5_1.value, '')
+        self.assertEqual(m.pid.pid_5.pid_5_2.value, 'ADAM')
+        self.assertNotIn('PID', m.children.traversal_indexes)
+
+    def test_validation_and_serialization_do_not_depend_on_reads(self):
+        def build():
+            m = Message('RSP_K21')
+            m.msh.msh_9 = 'RSP^K21^RSP_K21'
+            m.msh.msh_10 = '1'
+            m.msh.msh_11 = 'P'
+            m.msa.msa_1 = 'AA'
+            m.msa.msa_2 = 'ok'
+            m.qak.qak_1 = '1'
+            m.qpd.qpd_1 = 'Q'
+            return m
+
+        def snapshot(m):
+            result = m.validate(return_errors=True)
+            return (
+                m.to_er7().replace(m.msh.msh_7.value, 'TIMESTAMP'),
+                result.is_valid,
+                [str(e) for e in result.errors],
+                [str(w) for w in result.warnings],
+            )
+
+        expected = snapshot(build())
+
+        probed = build()
+        for path in ('msa.msa_3', 'qak.qak_3', 'qpd.qpd_3', 'rsp_k21_query_response.pid', 'msh.msh_16'):
+            element = probed
+            for part in path.split('.'):
+                element = getattr(element, part)
+            element.value
+            element.to_er7()
+        self.assertEqual(snapshot(probed), expected)
+
+        probed = build()
+        del probed.msa
+        self.assertEqual(snapshot(probed)[1], False)
+        for path in ('msa', 'msa.msa_1', 'qak.qak_1'):
+            element = probed
+            for part in path.split('.'):
+                element = getattr(element, part)
+            element.value
+            element.to_er7()
+        self.assertEqual(snapshot(probed)[1], False)
+        self.assertIn('Missing required child RSP_K21.MSA', snapshot(probed)[2])
+
+    def test_explicit_empty_value_is_preserved(self):
+        m = self._get_read_only_message()
+        m.pid.pid_3 = ''
+        m.pid.pid_5.pid_5_1 = ''
+        m.pv1 = ''
+
+        self.assertEqual(m.pid.pid_3.value, '')
+        self.assertEqual(m.pid.pid_5.pid_5_1.value, '')
+        self.assertIn('PV1', m.children.indexes)
+        self.assertEqual(m.pv1.value, 'PV1')
+        self.assertIn('\rPID|||', m.to_er7())
+        self.assertIn('\rPV1', m.to_er7())
+
+    def test_traversal_children_record_creation_rule(self):
+        m = self._get_read_only_message()
+        m.pid.pid_5.pid_5_1 = 'EVERYMAN'
+
+        pid = m.pid[0]
+        pid_5 = m.pid.pid_5[0]
+        pid_5_1 = m.pid.pid_5.pid_5_1[0]
+
+        self.assertEqual(pid.creation_rule['kind'], 'traversal')
+        self.assertEqual(pid.creation_rule['parent'], 'ADT_A01')
+        self.assertEqual(pid.creation_rule['path'], 'PID')
+        self.assertEqual(pid_5.creation_rule['parent'], 'PID')
+        self.assertEqual(pid_5.creation_rule['path'], 'PID.PID_5')
+        self.assertEqual(pid_5_1.creation_rule['parent'], 'PID_5')
+        self.assertFalse(pid_5_1.creation_rule.get('explicit_empty', False))
+
+        for element, reference in (
+            (pid, hl7apy.load_reference('PID', 'Segment', '2.5')),
+            (pid_5, hl7apy.load_reference('PID_5', 'Field', '2.5')),
+        ):
+            self.assertEqual(element.reference, reference)
+            self.assertEqual(element.reference_source['name'], element.name)
+            self.assertEqual(element.reference_source['content_type'], 'sequence')
+            self.assertEqual(element.reference_source['version'], '2.5')
+        self.assertEqual(pid_5_1.reference_source['name'], 'XPN_1')
+        self.assertEqual(pid_5_1.creation_rule['path'], 'PID.PID_5.XPN_1')
+        self.assertEqual(pid.creation_path, 'PID')
+        self.assertEqual(pid_5.creation_path, 'PID.PID_5')
+        self.assertEqual(pid_5_1.creation_path, 'PID.PID_5.XPN_1')
 
 
 class TestGroup(unittest.TestCase):
@@ -555,7 +676,7 @@ class TestGroup(unittest.TestCase):
         self.assertEqual(id(g.pid), id(pid))
 
         pid_31 = g.pid.pid_3
-        self.assertIn('PID', g.children.traversal_indexes)
+        self.assertNotIn('PID', g.children.traversal_indexes)
 
         pid_32 = pid.pid_3
         pid_31.value = 'a'
@@ -867,10 +988,10 @@ class TestSegment(unittest.TestCase):
         self.assertEqual(id(p.patient_identifier_list), id(f))
 
         c1 = p.pid_3.cx_10
-        self.assertIn('PID_3', p.children.traversal_indexes)
+        self.assertNotIn('PID_3', p.children.traversal_indexes)
 
         p.ALTERNATE_PATIENT_ID_PID.cx_10
-        self.assertIn('PID_4', p.children.traversal_indexes)
+        self.assertNotIn('PID_4', p.children.traversal_indexes)
 
         c2 = f.cx_10
         c1.value = 'a'
@@ -1274,10 +1395,10 @@ class TestField(unittest.TestCase):
         self.assertEqual(id(f.ASSIGNING_AGENCY_OR_DEPARTMENT), id(c))
 
         s1 = f.cx_10.cwe_1
-        self.assertIn('CX_10', f.children.traversal_indexes)
+        self.assertNotIn('CX_10', f.children.traversal_indexes)
 
         s2 = f.ASSIGNING_AUTHORITY.HD_1
-        self.assertIn('CX_4', f.children.traversal_indexes)
+        self.assertNotIn('CX_4', f.children.traversal_indexes)
 
         s2 = c.cwe_1
         s2.value = 'a'

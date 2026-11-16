@@ -66,7 +66,32 @@ You can also populate your message without explicit creation of its children, as
   >>> m.pid.pid_5.pid_5_1 = 'EVERYMAN'
   >>> m.pid.pid_5.pid_5_2 = 'ADAM'
 
-The ``PID`` segment is created during child traversal, as well as their related fields and components.
+The ``PID`` segment is created on the first write during child traversal, as well as their related
+fields and components. Reading a path that has not been populated yet is a read-only operation: it
+returns an empty result or the metadata of the expected child (e.g. its name and datatype), but it
+does not add anything to the message. This makes validation and serialization independent from the
+paths that have been inspected before. For example:
+
+.. code-block:: python
+
+  >>> m = Message("ADT_A01")
+  >>> m.pid.pid_5.pid_5_1.value  # it returns '' and does not create PID
+  ''
+  >>> m.to_er7()  # the message is unchanged
+  'MSH|^~\\&|||||<timestamp>|||||2.5'
+
+An explicit empty assignment, instead, keeps the child:
+
+.. code-block:: python
+
+  >>> m.pid.pid_5.pid_5_1 = ''
+  >>> m.pid.pid_5.pid_5_1.value
+  ''
+
+Each element created while traversing records how it has been built in the
+:attr:`creation_rule <hl7apy.core.Element.creation_rule>` attribute, and the path that led to it in
+:attr:`creation_path <hl7apy.core.Element.creation_path>`.
+
 The previous snippet of code is equivalent to:
 
 .. code-block:: python

@@ -5,6 +5,7 @@ Core classes
 .. automodule:: hl7apy.core
 
 .. autoclass::  Element
+    :members: creation_path, creation_rule
 
 .. autoclass::  Message
     :members: to_er7, to_mllp, validate, add_segment, add_group, add
