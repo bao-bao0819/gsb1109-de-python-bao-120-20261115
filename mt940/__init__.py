@@ -4,7 +4,9 @@ The high-level entry point is :func:`parse`, which accepts a filename, a file
 handle, or raw ``str``/``bytes`` and returns a
 :class:`~mt940.models.Transactions` collection you can iterate over. Use
 :func:`parse_statements` for files that concatenate several statements, and
-:class:`JSONEncoder` to serialise the result to JSON.
+:class:`JSONEncoder` to serialise the result to JSON. Pass an
+:class:`AmountFormat` through ``amount_format`` when the bank's separator
+convention is known.
 
 Example:
     >>> import mt940
@@ -22,16 +24,20 @@ Example:
     1
     >>> transactions[0].data['amount']
     <500.00 EUR>
+    >>> transactions[0].data['amount'].raw
+    '500,00'
 """
 
 from . import json, models, parser, processors, tags, utils
 from .__about__ import __version__
 from .json import JSONEncoder
-from .options import Options
+from .options import AmountFormat, AmountFormatError, Options
 from .parser import parse, parse_statements
 
 #: Supported names exported by ``from mt940 import *``.
 __all__ = [
+    'AmountFormat',
+    'AmountFormatError',
     'JSONEncoder',
     'Options',
     '__version__',

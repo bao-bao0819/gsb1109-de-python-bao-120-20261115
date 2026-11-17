@@ -66,6 +66,28 @@ Lowercase reversal-of-credit needs both switches. An application that changed
 decimal precision can also round a value during negation. :doc:`data-model`
 shows a context diagnostic, and :doc:`compatibility` lists the exact effects.
 
+The amount is one hundred times too large
+------------------------------------------
+
+An import with the wrong separator convention treats a decimal comma as
+grouping. Do not repair the existing objects by rewriting their text; configure
+the bank once and parse a fresh collection:
+
+.. doctest::
+
+   >>> source = ':20:EXAMPLE\n:60F:C260101EUR1.234,56'
+   >>> opening = mt940.parse(
+   ...     source, amount_format=mt940.AmountFormat(decimal=',', thousands='.')
+   ... ).data['final_opening_balance']
+   >>> opening.amount.amount, opening.amount.raw
+   (Decimal('1234.56'), '1.234,56')
+
+An already parsed result keeps its own convention and source text when a
+collection's options change later. To re-import with another bank
+configuration, parse the original source again rather than passing an
+``Amount`` through a new format. A literal that does not match the configured
+separator raises :class:`mt940.AmountFormatError` instead of being guessed.
+
 The currency is ``None``
 ------------------------
 

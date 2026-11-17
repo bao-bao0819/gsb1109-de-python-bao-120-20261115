@@ -392,7 +392,7 @@ class FloorLimitIndicator(Tag):
     pattern: ClassVar[str] = r"""^
     (?P<currency>[A-Z]{3})  # 3!a Currency
     (?P<status>[DC ]?)  # 2a Debit/Credit Mark
-    (?P<amount>[0-9,]{0,16})  # 15d Amount (includes decimal sign, so 16)
+    (?P<amount>[0-9.,]{0,16})  # 15d Amount plus configured separators
     $"""
 
     def __call__(
@@ -428,17 +428,32 @@ class FloorLimitIndicator(Tag):
             status = status.strip()
         amount: str = data.get('amount') or ''
         currency = data.get('currency')
+        amount_format = options.amount_format
         if status:
             key: str = status.lower() + '_floor_limit'
             return {
-                key: models.Amount(amount, status, currency, options=options)
+                key: models.Amount(
+                    amount,
+                    status,
+                    currency,
+                    options=options,
+                    amount_format=amount_format,
+                )
             }
         return {
             'd_floor_limit': models.Amount(
-                amount, 'D', currency, options=options
+                amount,
+                'D',
+                currency,
+                options=options,
+                amount_format=amount_format,
             ),
             'c_floor_limit': models.Amount(
-                amount, 'C', currency, options=options
+                amount,
+                'C',
+                currency,
+                options=options,
+                amount_format=amount_format,
             ),
         }
 
@@ -548,7 +563,7 @@ class BalanceBase(Tag):
     (?P<month>\d{2})
     (?P<day>\d{2})
     (?P<currency>.{3})  # 3!a Currency
-    (?P<amount>[0-9,]{0,16})  # 15d Amount (includes decimal sign, so 16)
+    (?P<amount>[0-9.,]{0,16})  # 15d Amount plus configured separators
     """
 
     def __call__(
@@ -574,9 +589,20 @@ class BalanceBase(Tag):
         """
         data = super().__call__(transactions, value)
         options = _options_of(transactions)
-        data['amount'] = models.Amount(**data, options=options)
+        amount_format = options.amount_format
+        data['amount'] = models.Amount(
+            **data,
+            options=options,
+            amount_format=amount_format,
+        )
         data['date'] = models.Date(**data)
-        return {self.slug: models.Balance(**data, options=options)}
+        return {
+            self.slug: models.Balance(
+                **data,
+                options=options,
+                amount_format=amount_format,
+            )
+        }
 
 
 class OpeningBalance(BalanceBase):
@@ -640,7 +666,7 @@ class Statement(Tag):
     (?P<funds_code>[A-Z])? # [1!a] Funds Code (3rd character of the currency
                             # code, if needed)
     [\n ]?
-    (?P<amount>[\d,]{1,15})  # 15d Amount
+    (?P<amount>[\d.,]{1,15})  # 15d Amount plus configured separators
     (?P<id>[A-Z][A-Z0-9 ]{3})?
     (?P<customer_reference>((?!//)[^\n]){0,16})
     (//(?P<bank_reference>.{0,23}))?
@@ -676,8 +702,11 @@ class Statement(Tag):
         """
         data = super().__call__(transactions, value)
         data.setdefault('currency', transactions.currency)
+        options = _options_of(transactions)
         data['amount'] = models.Amount(
-            **data, options=_options_of(transactions)
+            **data,
+            options=options,
+            amount_format=options.amount_format,
         )
         date = data['date'] = models.Date(**data)
 
@@ -792,7 +821,7 @@ class StatementGLS(Statement):
     (?P<status>R?[DC])  # 2a Debit/Credit Mark
     (?P<funds_code>[A-Z])?
     [\n ]?
-    (?P<amount>[\d,]{1,15})  # 15d Amount
+    (?P<amount>[\d.,]{1,15})  # 15d Amount plus configured separators
     (?P<id>[A-Z][A-Z0-9 ]{3})?
     # Customer reference of any length, up to the // bank reference.
     (?P<customer_reference>(?:(?!//)[^\n])*)
@@ -919,7 +948,7 @@ class SumEntries(Tag):
     pattern: ClassVar[str] = r"""^
     (?P<number>\d*)
     (?P<currency>.{3})  # 3!a Currency
-    (?P<amount>[\d,]{1,15})  # 15d Amount
+    (?P<amount>[\d.,]{1,15})  # 15d Amount plus configured separators
     """
     #: Debit or credit mark supplied to the summary amount constructor.
     status: ClassVar[str]
@@ -946,9 +975,12 @@ class SumEntries(Tag):
         """
         data = super().__call__(transactions, value)
         data['status'] = self.status
+        options = _options_of(transactions)
         return {
             self.slug: models.SumAmount(
-                **data, options=_options_of(transactions)
+                **data,
+                options=options,
+                amount_format=options.amount_format,
             )
         }
 

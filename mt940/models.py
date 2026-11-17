@@ -9,6 +9,7 @@ in raw MT940 data and coerce them to native Python types.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import decimal
 import re
@@ -19,7 +20,7 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
-from typing import TYPE_CHECKING, Any, ClassVar, overload
+from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 import mt940
 
@@ -27,7 +28,7 @@ from . import processors, utils
 
 # Kept at runtime: 5.0.0 exposed it as mt940.models.Processors.
 from ._types import Processors as Processors  # noqa: PLC0414, TC001
-from .options import Options
+from .options import AmountFormat, Options
 
 if TYPE_CHECKING:
     from typing_extensions import Self
@@ -233,13 +234,25 @@ class Date(datetime.date, Model):
 
 
 class Amount(Model):
-    """A decimal amount paired with an optional currency code.
+    """A decimal amount with its source literal and bank convention.
 
     By default only the exact status ``D`` negates the supplied numeric value.
     ``Options.reversal_sign`` also negates ``RC``. Lowercase marks are
     recognised only with ``Options.case_insensitive_marks``. ``C`` and ``RD``
     leave the value unchanged. Status and currency codes are not validated or
     stored together.
+
+    Amount text is parsed by the explicit :class:`mt940.options.AmountFormat`
+    on ``options`` or by the ``amount_format`` argument. That convention alone
+    decides what ``.`` and ``,`` mean; the value's magnitude and digit count
+    are never used to guess. ``None`` selects the historical permissive
+    comma-or-point handling for backwards compatibility. A parse never edits
+    the source literal in place and a format is applied at most once.
+
+    A :class:`decimal.Decimal` or another :class:`Amount` is treated as an
+    already-canonical value: it is copied without running the configured
+    literal grammar again. This makes repeated processing idempotent instead of
+    interpreting canonical decimal text as a grouped literal.
 
     Equality and hashing use both amount and currency, including across
     ``Amount`` subclasses. Both attributes remain writable for compatibility.
@@ -251,78 +264,163 @@ class Amount(Model):
             the result.
         currency: Supplied currency string or ``None``. No conversion is
             applied.
-
-    Examples:
-        >>> Amount('123,45', 'D', 'EUR')
-        <-123.45 EUR>
-        >>> Amount('123.45', 'RC', 'EUR')
-        <123.45 EUR>
-        >>> Amount(
-        ...     '123.45',
-        ...     'RC',
-        ...     'EUR',
-        ...     options=mt940.Options(reversal_sign=True),
-        ... )
-        <-123.45 EUR>
-        >>> Amount(
-        ...     '1.00',
-        ...     'd',
-        ...     'EUR',
-        ...     options=mt940.Options(case_insensitive_marks=True),
-        ... )
-        <-1.00 EUR>
-        >>> Amount('123.45', 'RD', 'EUR', options=mt940.Options.all())
-        <123.45 EUR>
+        raw: Exact source literal supplied to the constructor, including any
+            grouping and surrounding whitespace. Never rewritten by parsing.
+        amount_format: Convention snapshotted for this result. Later changes to
+            a collection's options do not reinterpret an existing amount.
+        _source_status: Source debit or credit mark retained for copies and
+            serialisation. Use the tag result's ``status`` for public access.
     """
+
+    # Slot storage keeps the historical ``vars()`` shape (amount and currency)
+    # for old golden files and callers, while retaining the new source
+    # metadata on each instance.
+    #: Additional per-instance slots for source metadata.
+    __slots__: ClassVar[tuple[str, ...]] = (
+        'raw',
+        'amount_format',
+        # Source debit/credit mark retained for copies and serialisation.
+        '_source_status',
+    )
+
+    def __getstate__(self) -> dict[str, object]:
+        """Return the historical state plus source metadata.
+
+        Returns:
+            A dictionary containing ``amount``, ``currency``, ``raw`` and the
+            snapshotted format. The source status is retained separately when
+            present.
+        """
+        state: dict[str, object] = {
+            'amount': self.amount,
+            'currency': self.currency,
+            'raw': self.raw,
+            'amount_format': self.amount_format,
+        }
+        source_status = getattr(self, '_source_status', None)
+        state['source_status'] = source_status
+        return state
+
+    def __setstate__(self, state: dict[str, object]) -> None:
+        """Restore an amount, including state written before source metadata.
+
+        Args:
+            state: Instance mapping from :meth:`__getstate__` or a pre-change
+                serialized result. Old state contains only ``amount`` and
+                ``currency``; the original literal is then the canonical
+                decimal text and no format is attributed to it.
+        """
+        self.amount: decimal.Decimal = cast(
+            'decimal.Decimal', state['amount']
+        )
+        self.currency: str | None = cast(
+            'str | None', state.get('currency')
+        )
+        raw = state.get('raw')
+        self.raw = str(self.amount) if raw is None else str(raw)
+        amount_format = state.get('amount_format')
+        self.amount_format = (
+            amount_format
+            if isinstance(amount_format, AmountFormat)
+            else None
+        )
+        if 'source_status' in state:
+            self._source_status = state['source_status']
 
     def __init__(
         self,
-        amount: str,
+        amount: str | decimal.Decimal | Amount,
         status: str | None,
         currency: str | None = None,
         *,
         options: Options | None = None,
+        amount_format: AmountFormat | None = None,
         **kwargs: Any,
     ) -> None:
-        """Convert an amount string to a decimal and apply its status mark.
+        """Parse an amount literal and apply its status mark.
 
         Args:
-            amount: Decimal text using a comma or point as the decimal
-                separator. Conversion does not impose a scale or round to
-                currency units.
+            amount: Source decimal text, an already-canonical ``Decimal``, or
+                an existing ``Amount`` to copy. Text must follow the configured
+                convention exactly. No scale or currency rounding is imposed.
             status: Debit or credit mark. ``None`` and unrecognised marks leave
                 the numeric value unchanged. Negation changes an already
                 negative input to positive when a debit mark applies.
             currency: Currency identifier stored without validation, or
                 ``None``.
             options: Switches controlling reversal and lowercase mark handling.
-                Omitting them recognises only the exact ``D`` as negative.
+                Its ``amount_format`` supplies the bank convention when
+                ``amount_format`` is omitted.
+            amount_format: Explicit convention for this value. It takes
+                precedence over the one on ``options``. The resolved format is
+                snapshotted on the result.
             **kwargs: Ignored parsed fields, allowing a whole tag mapping here.
 
         Raises:
-            decimal.InvalidOperation: The amount is not valid decimal text
-                under the active decimal context.
+            decimal.InvalidOperation: The amount is not valid under the
+                selected convention.
+            AmountFormatError: The literal uses a separator or grouping that
+                the explicit convention rejects.
 
         Decimal arithmetic, including negation, uses the current decimal
-        context.
+        context. The source literal is never normalised in place.
         """
         del kwargs
-        self.amount: decimal.Decimal = decimal.Decimal(
-            amount.replace(',', '.')
-        )
-        self.currency: str | None = currency
+        options = options or Options()
+        if isinstance(amount, Amount):
+            self.amount = amount.amount
+            self.currency = (
+                currency if currency is not None else amount.currency
+            )
+            self.raw = amount.raw
+            self.amount_format = amount.amount_format
+            self._source_status = getattr(amount, '_source_status', None)
+            return
+        if isinstance(amount, decimal.Decimal):
+            self.amount = amount
+            self.raw = str(amount)
+            self.amount_format = amount_format or options.amount_format
+            self.currency = currency
+            self._source_status = status
+        else:
+            resolved_format = amount_format or options.amount_format
+            self.amount_format = resolved_format
+            self.raw = amount
+            self._source_status = status
+            parser = resolved_format or AmountFormat.legacy()
+            self.amount = parser.parse(amount)
+            self.currency = currency
 
         # C = credit, D = debit, RC = reversal of a credit (money leaves the
         # account, like a debit), RD = reversal of a debit (money comes back
         # in, like a credit). The tag patterns compile with re.IGNORECASE,
         # so a lowercase mark reaches this constructor as-is.
-        options = options or Options()
         mark = status or ''
         if options.case_insensitive_marks:
             mark = mark.upper()
         debit_marks = {'D', 'RC'} if options.reversal_sign else {'D'}
         if mark in debit_marks:
             self.amount = -self.amount
+
+    @property
+    def canonical(self) -> decimal.Decimal:
+        """Return the exact signed decimal value, without formatting text."""
+        return self.amount
+
+    @property
+    def original(self) -> str:
+        """Return the untouched source literal; an alias for :attr:`raw`."""
+        return self.raw
+
+    @property
+    def source(self) -> str:
+        """Return the untouched source literal; an alias for :attr:`raw`."""
+        return self.raw
+
+    @property
+    def literal(self) -> str:
+        """Return the untouched source literal; an alias for :attr:`raw`."""
+        return self.raw
 
     def __eq__(self, other: object) -> bool:
         """Return whether ``other`` is an equal-valued ``Amount``."""
@@ -377,6 +475,28 @@ class SumAmount(Amount):
         super().__init__(*args, **kwargs)
         self.number: int = number
 
+    def __getstate__(self) -> dict[str, object]:
+        """Return the historical state plus source metadata.
+
+        Returns:
+            A dictionary containing ``amount``, ``currency``, ``raw`` and the
+            snapshotted format. The source status is retained separately when
+            present.
+        """
+        state: dict[str, object] = super().__getstate__()
+        state['number'] = getattr(self, 'number', '')
+        return state
+
+    def __setstate__(self, state: dict[str, object]) -> None:
+        """Restore an amount and its informational entry count.
+
+        Args:
+            state: Instance mapping from :meth:`__getstate__` or an older
+                serialized result.
+        """
+        self.number = state.get('number', '')  # type: ignore[assignment]
+        super().__setstate__(state)
+
     def __eq__(self, other: object) -> bool:
         """Return whether ``other`` is an equal-valued amount.
 
@@ -398,10 +518,12 @@ class SumAmount(Amount):
 class Balance(Model):
     """A dated balance with a debit or credit status and optional amount.
 
-    A non-empty amount string is converted to :class:`Amount`. Existing amount
-    objects are retained by reference. Empty strings and ``None`` stay
-    unchanged. Equality and hashing use amount and status only. The date is
-    informational and does not distinguish otherwise equal balances.
+    A non-empty amount string is converted to :class:`Amount` with the
+    configured convention. Existing amount objects are retained by reference,
+    so an already-parsed balance is never cleaned a second time. Empty strings
+    and ``None`` stay unchanged. Equality and hashing use amount and status
+    only. The date is informational and does not distinguish otherwise equal
+    balances.
 
     Attributes:
         status: Original debit or credit mark, or ``None``.
@@ -425,6 +547,7 @@ class Balance(Model):
         date: Date | None = None,
         *,
         options: Options | None = None,
+        amount_format: AmountFormat | None = None,
         **kwargs: Any,
     ) -> None:
         """Store a balance and convert a non-empty amount string if needed.
@@ -436,6 +559,9 @@ class Balance(Model):
                 objects are neither copied nor re-signed.
             date: Balance date retained without conversion.
             options: Passed to :class:`Amount` only when converting a string.
+            amount_format: Explicit convention for a string. It takes
+                precedence over ``options.amount_format`` and is snapshotted
+                on the resulting amount.
             **kwargs: Parsed fields. Only ``currency`` is used during
                 conversion.
 
@@ -443,14 +569,18 @@ class Balance(Model):
             ValueError: A non-empty amount string is supplied without
                 ``status``.
             decimal.InvalidOperation: The amount string is not valid decimal
-                text.
+                text under the selected convention.
         """
         if isinstance(amount, str) and amount:
             if status is None:
                 msg = 'Cannot create Amount without status'
                 raise ValueError(msg)
             amount = Amount(
-                amount, status, kwargs.get('currency'), options=options
+                amount,
+                status,
+                kwargs.get('currency'),
+                options=options,
+                amount_format=amount_format,
             )
         self.status: str | None = status
         self.amount: Amount | str | None = amount
@@ -646,6 +776,7 @@ class Transactions(Sequence[Transaction]):
         transaction_boundary: Iterable[str] | None = None,
         *,
         options: Options | None = None,
+        amount_format: AmountFormat | None = None,
     ) -> None:
         """Create an empty collection with tag and processor overrides.
 
@@ -660,10 +791,23 @@ class Transactions(Sequence[Transaction]):
                 consumed once into a ``frozenset``. Omitted or empty selects no
                 extra boundaries.
             options: Parser switches. Omitted or ``None`` disables all ten
-                fields.
+                boolean fields.
+            amount_format: Explicit bank amount convention. When supplied, it
+                overrides ``options.amount_format`` for this collection.
 
         No tags or processors run until :meth:`parse` is called.
         """
+        if amount_format is not None:
+            value: object = amount_format
+            if not isinstance(value, AmountFormat):
+                msg = (
+                    'amount_format must be an mt940.AmountFormat, not '
+                    f'{type(value).__name__}'
+                )
+                raise TypeError(msg)
+            options = dataclasses.replace(
+                options or Options(), amount_format=value
+            )
         self.options: Options = options or Options()
         self.processors = self.DEFAULT_PROCESSORS.copy()
         self.tags: MutableMapping[int | str, mt940.tags.Tag] = dict(

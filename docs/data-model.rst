@@ -27,8 +27,9 @@ each with another ``data`` dictionary and a reference to its collection.
      - ``data``, ``transactions``
      - Parsed transaction fields and the owning collection.
    * - ``Amount``
-     - ``amount``, ``currency``
-     - Signed ``Decimal`` and currency string or ``None``.
+     - ``amount``, ``currency``, ``raw``
+     - Signed ``Decimal``, currency string or ``None``, and the exact source
+       literal.
    * - ``Balance``
      - ``status``, ``amount``, ``date``
      - Original debit/credit mark, an ``Amount`` and a date for ordinary parsed
@@ -115,6 +116,48 @@ Only exact ``D`` negates by default. ``reversal_sign`` also negates ``RC``.
 ``case_insensitive_marks`` recognises lowercase marks. ``C`` and ``RD`` leave
 the numeric value unchanged. The original status is retained separately.
 There is no currency conversion or validation of currency codes.
+
+State the bank's amount convention explicitly
+---------------------------------------------
+
+Do not decide whether ``.`` is a decimal point or a thousands separator from
+the number's size. Banks differ, and a value such as ``1.234`` is ambiguous
+without configuration. Pass an :class:`mt940.AmountFormat` in
+:class:`mt940.Options`:
+
+.. doctest::
+
+   >>> comma_bank = mt940.AmountFormat(decimal=',', thousands='.')
+   >>> options = mt940.Options(amount_format=comma_bank)
+   >>> amount = mt940.models.Amount(
+   ...     '1.234,56', 'C', 'EUR', options=options
+   ... )
+   >>> amount.amount, amount.raw
+   (Decimal('1234.56'), '1.234,56')
+   >>> dot_bank = mt940.AmountFormat(decimal='.', thousands=',')
+   >>> mt940.models.Amount(
+   ...     '1,234.56', 'C', 'EUR', amount_format=dot_bank
+   ... ).amount
+   Decimal('1234.56')
+   >>> imported = mt940.parse(
+   ...     ':20:REF\n:60F:C260101EUR1.234,56',
+   ...     amount_format=comma_bank,
+   ... )
+   >>> imported.data['final_opening_balance'].amount.amount
+   Decimal('1234.56')
+
+``amount.raw`` (also available as ``original``, ``source`` and ``literal``)
+preserves the source text. The parsed result snapshots its format, so changing
+a collection's options later does not reinterpret it. Passing an existing
+``Amount`` or a ``Decimal`` copies an already-canonical value and never applies
+the literal grammar a second time.
+
+A configured format rejects a different decimal separator, an invalid grouping
+shape, a repeated separator and (when ``decimal_places`` is set) the wrong
+number of fractional digits. Errors are :class:`mt940.AmountFormatError`, a
+subclass of both :class:`ValueError` and :class:`decimal.InvalidOperation`.
+Omitting ``amount_format`` keeps the historical permissive comma-or-point
+handling for existing integrations; new bank integrations should configure it.
 
 Decimal construction preserves input digits, but debit negation uses the active
 decimal context and can round long values:

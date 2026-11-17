@@ -2,9 +2,11 @@ Choose compatibility options
 ============================
 
 Some parsing corrections change the output of previously accepted input.
-:class:`mt940.Options` keeps all ten switches ``False`` by default. Choose
-individual switches after comparing your source files, or use
-:meth:`mt940.options.Options.all` to enable every declared field.
+:class:`mt940.Options` keeps all ten boolean switches ``False`` by default.
+Choose individual switches after comparing your source files, or use
+:meth:`mt940.options.Options.all` to enable every declared boolean switch.
+:attr:`Options.amount_format` is separate bank configuration, not a legacy
+switch; see :doc:`data-model`.
 
 Compare a reversal
 ------------------
@@ -99,11 +101,12 @@ and use ``dataclasses.replace`` when a copy needs one changed field:
    >>> all(getattr(mt940.Options.all(), name) for name in mt940.Options.names())
    True
 
-``Options.names()`` returns dataclass field names in declaration order.
-``Options.all()`` passes every name to the called class's constructor with
-value ``True``. A dataclass subclass works only if its constructor accepts all
-declared fields. An added ``init=False`` field can therefore make ``all()``
-raise ``TypeError``.
+``Options.names()`` returns the boolean switch names in declaration order.
+``Options.fields()`` includes non-boolean configuration such as
+``amount_format``. ``Options.all()`` passes every switch name to the called
+class's constructor with value ``True``. A dataclass subclass works only if its
+constructor accepts all declared switches. An added ``init=False`` boolean field
+can therefore make ``all()`` raise ``TypeError``.
 
 Migration checks
 ----------------

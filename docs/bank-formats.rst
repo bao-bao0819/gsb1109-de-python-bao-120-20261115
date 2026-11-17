@@ -134,6 +134,30 @@ string, including an empty string when omitted. Convert and validate the count
 in your application if you require an integer. Its historical annotation does
 not change that runtime behaviour.
 
+Amount separators
+-----------------
+
+An amount literal is read with the convention on
+:attr:`mt940.Options.amount_format`, not inferred from its digits. Configure
+the bank's decimal and grouping separators explicitly before importing a
+report:
+
+.. doctest::
+
+   >>> bank = mt940.AmountFormat(decimal=',', thousands='.')
+   >>> parsed = mt940.parse(
+   ...     ':20:REF\n:60F:C260101EUR1.234,56', amount_format=bank
+   ... )
+   >>> parsed.data['final_opening_balance'].amount.amount
+   Decimal('1234.56')
+
+The parsed :class:`mt940.models.Amount` keeps the exact source text in
+``amount.raw``. A configuration that does not match a literal raises
+:class:`mt940.AmountFormatError`; it never falls back to guessing. Existing
+parsed values keep their snapshotted convention when options change. See
+:doc:`data-model` for the constructor forms and :doc:`compatibility` for the
+default mode.
+
 Structured ``:86:`` fields
 --------------------------
 

@@ -10,6 +10,7 @@ it afterwards.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import pathlib
 import re
@@ -201,6 +202,7 @@ def parse(
     transaction_boundary: Iterable[str] | None = None,
     *,
     options: Options | None = None,
+    amount_format: mt940.AmountFormat | None = None,
 ) -> Transactions:
     """Parse a source into one collection with statement metadata.
 
@@ -224,6 +226,10 @@ def parse(
             omitted preserves the default grouping rules.
         options: Immutable opt-in behaviour switches. All ten switches default
             to ``False``. See :class:`mt940.options.Options`.
+        amount_format: Explicit bank amount convention. When supplied, it
+            replaces ``options.amount_format`` for this parse. It applies the
+            same way to every resulting balance, floor limit, statement and
+            summary amount.
 
     Returns:
         A populated :class:`~mt940.models.Transactions`. Empty or unrecognised
@@ -237,11 +243,14 @@ def parse(
         RuntimeError: A recognised tag's value does not match its pattern.
         ValueError: A parsed date or other model value is invalid.
         decimal.InvalidOperation: An amount cannot be converted to a decimal.
+        mt940.AmountFormatError: An amount literal does not follow the
+            configured separator convention.
 
     Exceptions raised by custom tags, processors and file handles propagate.
     See :meth:`mt940.models.Transactions.parse` for grouping and mutation
     rules.
     """
+    options = _options_with_amount_format(options, amount_format)
     data = _read(src, encoding, strip_bom=(options or Options()).strip_bom)
     transactions = _new_transactions(
         processors, tags, transaction_boundary, options
@@ -249,6 +258,36 @@ def parse(
     _ = transactions.parse(data)
 
     return transactions
+
+
+def _options_with_amount_format(
+    options: Options | None,
+    amount_format: mt940.AmountFormat | None,
+) -> Options | None:
+    """Combine an options object with an import-level amount convention.
+
+    Args:
+        options: Caller-supplied switches, or ``None`` for the defaults.
+        amount_format: Explicit convention that overrides the one on
+            ``options`` when not ``None``.
+
+    Returns:
+        ``options`` unchanged when no explicit format is supplied. Otherwise a
+        new :class:`Options` with only ``amount_format`` replaced.
+
+    Raises:
+        TypeError: ``options`` or ``amount_format`` has an unsupported type.
+    """
+    if amount_format is None:
+        return options
+    value: object = amount_format
+    if not isinstance(value, mt940.AmountFormat):
+        msg = (
+            'amount_format must be an mt940.AmountFormat, not '
+            f'{type(value).__name__}'
+        )
+        raise TypeError(msg)
+    return dataclasses.replace(options or Options(), amount_format=value)
 
 
 def parse_statements(
@@ -259,6 +298,7 @@ def parse_statements(
     transaction_boundary: Iterable[str] | None = None,
     *,
     options: Options | None = None,
+    amount_format: mt940.AmountFormat | None = None,
 ) -> list[Transactions]:
     """Parse each ``:20:`` statement block into a separate collection.
 
@@ -283,6 +323,8 @@ def parse_statements(
             block's opening reference. Prefer :func:`parse` if ``:20:``
             separates transactions within one statement.
         options: Behaviour switches shared by every collection.
+        amount_format: Explicit bank amount convention shared by every
+            collection. It overrides ``options.amount_format`` when supplied.
 
     Returns:
         Collections in source order, including blocks containing balances but
@@ -296,10 +338,13 @@ def parse_statements(
         RuntimeError: A recognised tag fails to parse in any block.
         ValueError: A parsed model value is invalid.
         decimal.InvalidOperation: A parsed amount is not a valid decimal.
+        mt940.AmountFormatError: An amount literal does not follow the
+            configured separator convention.
 
     Other source, tag and processor exceptions propagate as in :func:`parse`.
     No partial list is returned when a later block fails.
     """
+    options = _options_with_amount_format(options, amount_format)
     data = _read(src, encoding, strip_bom=(options or Options()).strip_bom)
     statements: list[Transactions] = []
     # Each collection materialises the boundary into a frozenset. Hand the
