@@ -347,6 +347,9 @@ transactions:
     entry_date: &id004 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9ILAg==
+    entry_date_basis: statement_window
+    entry_date_raw: '1102'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: R
     guessed_entry_date: *id004
@@ -378,6 +381,9 @@ transactions:
     entry_date: &id005 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9ILAg==
+    entry_date_basis: statement_window
+    entry_date_raw: '1102'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: R
     guessed_entry_date: *id005
@@ -409,6 +415,9 @@ transactions:
     entry_date: &id006 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9MKFA==
+    entry_date_basis: value_date_year
+    entry_date_raw: '1020'
+    entry_date_status: resolved
     extra_details: Card transaction
     funds_code: null
     guessed_entry_date: *id006
@@ -442,6 +451,9 @@ transactions:
     entry_date: &id007 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9MKFA==
+    entry_date_basis: value_date_year
+    entry_date_raw: '1020'
+    entry_date_status: resolved
     extra_details: Transfer
     funds_code: null
     guessed_entry_date: *id007
@@ -475,6 +487,9 @@ transactions:
     entry_date: &id008 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9MKFA==
+    entry_date_basis: value_date_year
+    entry_date_raw: '1020'
+    entry_date_status: resolved
     extra_details: Interest credit
     funds_code: null
     guessed_entry_date: *id008

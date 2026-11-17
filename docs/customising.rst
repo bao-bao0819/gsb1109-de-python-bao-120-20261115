@@ -130,3 +130,48 @@ replaces the default structured-details processor when fragments should be
 joined with spaces. The mBank callbacks in :mod:`mt940.processors` extract
 bank-specific codes and references when explicitly registered.
 The :mod:`mt940._types` reference defines the processor protocols.
+
+Supply bank rules for year-less entry dates
+-------------------------------------------
+
+A ``:61:`` entry date has no year. The parser bounds it with the balances
+around the transaction's value date and with an optional
+:class:`mt940.EntryDateRules` instance passed to :func:`mt940.parse` or
+:meth:`mt940.models.Transactions.parse`:
+
+.. doctest::
+
+   >>> import datetime as dt
+   >>> import mt940
+   >>> rules = mt940.EntryDateRules(max_days_from_value=200)
+   >>> entry_statement = mt940.parse(
+   ...     ':20:REF\n'
+   ...     ':60F:C231231EUR10,00\n'
+   ...     ':61:2406010101C1,00NTRFREF\n',
+   ...     entry_date_rules=rules,
+   ... )
+   >>> entry_statement[0].data['entry_date']
+   Date(2024, 1, 1)
+   >>> entry_statement[0].data['entry_date_basis']
+   'statement_window+bank_rule'
+
+``max_days_from_value`` limits the absolute gap. ``max_days_before_value`` and
+``max_days_after_value`` bound one direction each. A rule's ``window_start``
+and ``window_end`` narrow the statement window; ``require_window`` rejects a
+resolution without one. Rules are frozen, so one instance can be shared.
+
+.. doctest::
+
+   >>> unresolved = mt940.parse(
+   ...     ':20:REF\n'
+   ...     ':60F:C230101EUR10,00\n'
+   ...     ':61:2406010101C1,00NTRFREF\n'
+   ... )
+   >>> unresolved[0].data['entry_date'] is None
+   True
+   >>> [str(item) for item in unresolved[0].data['entry_date_candidates']]
+   ['2024-01-01', '2025-01-01']
+
+The second statement has no closing balance, so January 1 fits both 2024 and
+2025 within the 330-day posting limit. The parser lists both candidates rather
+than choosing from the run date.

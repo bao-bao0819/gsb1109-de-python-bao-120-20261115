@@ -152,6 +152,9 @@ transactions:
     entry_date: &id003 !!python/object/apply:mt940.models.Date
     - !!binary |
       B90MCQ==
+    entry_date_basis: statement_window
+    entry_date_raw: '1209'
+    entry_date_status: resolved
     extra_details: '20131209007602198765432000000012'
     funds_code: null
     guessed_entry_date: *id003
@@ -176,6 +179,9 @@ transactions:
     entry_date: &id005 !!python/object/apply:mt940.models.Date
     - !!binary |
       B90MCQ==
+    entry_date_basis: statement_window
+    entry_date_raw: '1209'
+    entry_date_status: resolved
     extra_details: '20131209007602187654321000000012'
     funds_code: null
     guessed_entry_date: *id005
@@ -200,6 +206,9 @@ transactions:
     entry_date: &id006 !!python/object/apply:mt940.models.Date
     - !!binary |
       B90MEA==
+    entry_date_basis: statement_window
+    entry_date_raw: '1216'
+    entry_date_status: resolved
     extra_details: '20131216007602112345678000000012'
     funds_code: null
     guessed_entry_date: *id006
@@ -227,6 +236,9 @@ transactions:
     entry_date: &id007 !!python/object/apply:mt940.models.Date
     - !!binary |
       B90MEg==
+    entry_date_basis: statement_window
+    entry_date_raw: '1218'
+    entry_date_status: resolved
     extra_details: '20131216816204000100125000000012'
     funds_code: null
     guessed_entry_date: *id007

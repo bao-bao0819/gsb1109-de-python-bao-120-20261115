@@ -168,6 +168,9 @@ transactions:
     entry_date: &id004 !!python/object/apply:mt940.models.Date
     - !!binary |
       B+MKGQ==
+    entry_date_basis: statement_window
+    entry_date_raw: '1025'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: null
     guessed_entry_date: *id004

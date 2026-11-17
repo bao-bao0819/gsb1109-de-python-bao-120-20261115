@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from ._types import Processors, Source
+    from .dates import EntryDateRules
     from .models import Transactions
 
 
@@ -165,23 +166,25 @@ def _new_transactions(
     tags: dict[int | str, mt940.tags.Tag] | None,
     transaction_boundary: Iterable[str] | None,
     options: Options | None,
+    entry_date_rules: EntryDateRules | None = None,
 ) -> Transactions:
     """Build the collection, passing ``options`` only when there are any.
 
     A :class:`~mt940.models.Transactions` subclass written against 5.0.0 has no
-    ``options`` parameter. Leaving the keyword out when it would be ``None``
-    anyway keeps such a subclass working through this module.
+    ``options`` or ``entry_date_rules`` parameter. Leaving both keywords out
+    when they would be ``None`` keeps such a subclass working.
 
     Args:
         processors: See :func:`parse`.
         tags: See :func:`parse`.
         transaction_boundary: See :func:`parse`.
         options: See :func:`parse`.
+        entry_date_rules: See :func:`parse`.
 
     Returns:
         A fresh, empty collection.
     """
-    if options is None:
+    if options is None and entry_date_rules is None:
         return mt940.models.Transactions(
             processors, tags, transaction_boundary=transaction_boundary
         )
@@ -190,6 +193,7 @@ def _new_transactions(
         tags,
         transaction_boundary=transaction_boundary,
         options=options,
+        entry_date_rules=entry_date_rules,
     )
 
 
@@ -201,6 +205,7 @@ def parse(
     transaction_boundary: Iterable[str] | None = None,
     *,
     options: Options | None = None,
+    entry_date_rules: EntryDateRules | None = None,
 ) -> Transactions:
     """Parse a source into one collection with statement metadata.
 
@@ -224,6 +229,8 @@ def parse(
             omitted preserves the default grouping rules.
         options: Immutable opt-in behaviour switches. All ten switches default
             to ``False``. See :class:`mt940.options.Options`.
+        entry_date_rules: Bank limits for a year-less entry date. ``None``
+            keeps the value-date fallback and the coverage window.
 
     Returns:
         A populated :class:`~mt940.models.Transactions`. Empty or unrecognised
@@ -244,7 +251,7 @@ def parse(
     """
     data = _read(src, encoding, strip_bom=(options or Options()).strip_bom)
     transactions = _new_transactions(
-        processors, tags, transaction_boundary, options
+        processors, tags, transaction_boundary, options, entry_date_rules
     )
     _ = transactions.parse(data)
 
@@ -259,6 +266,7 @@ def parse_statements(
     transaction_boundary: Iterable[str] | None = None,
     *,
     options: Options | None = None,
+    entry_date_rules: EntryDateRules | None = None,
 ) -> list[Transactions]:
     """Parse each ``:20:`` statement block into a separate collection.
 
@@ -283,6 +291,7 @@ def parse_statements(
             block's opening reference. Prefer :func:`parse` if ``:20:``
             separates transactions within one statement.
         options: Behaviour switches shared by every collection.
+        entry_date_rules: Bank limits shared by every collection.
 
     Returns:
         Collections in source order, including blocks containing balances but
@@ -311,7 +320,9 @@ def parse_statements(
         if not block.strip().startswith(':20:'):
             # Drop any leading header / empty chunk before the first :20:.
             continue
-        transactions = _new_transactions(processors, tags, boundary, options)
+        transactions = _new_transactions(
+            processors, tags, boundary, options, entry_date_rules
+        )
         boundary = transactions.transaction_boundary
         _ = transactions.parse(block)
         statements.append(transactions)

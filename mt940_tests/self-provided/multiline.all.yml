@@ -149,6 +149,9 @@ transactions:
     entry_date: &id003 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9QIBA==
+    entry_date_basis: statement_window
+    entry_date_raw: 0804
+    entry_date_status: resolved
     extra_details: /OCMT/EUR4,5//IACC/D3/
     funds_code: R
     guessed_entry_date: *id003
@@ -188,6 +191,9 @@ transactions:
     entry_date: &id005 !!python/object/apply:mt940.models.Date
     - !!binary |
       B+YMFA==
+    entry_date_basis: statement_window
+    entry_date_raw: '1220'
+    entry_date_status: resolved
     extra_details: Paiement
     funds_code: null
     guessed_entry_date: *id005

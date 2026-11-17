@@ -134,6 +134,9 @@ transactions:
     entry_date: &id003 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9wGCA==
+    entry_date_basis: statement_window
+    entry_date_raw: 0608
+    entry_date_status: resolved
     extra_details: marechal s
     funds_code: null
     guessed_entry_date: *id003
@@ -159,6 +162,9 @@ transactions:
     entry_date: &id005 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9wGCA==
+    entry_date_basis: statement_window
+    entry_date_raw: 0608
+    entry_date_status: resolved
     extra_details: marechal s
     funds_code: null
     guessed_entry_date: *id005

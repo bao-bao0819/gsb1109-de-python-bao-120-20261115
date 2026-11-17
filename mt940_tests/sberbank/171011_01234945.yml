@@ -171,6 +171,9 @@ transactions:
     entry_date: &id003 !!python/object/apply:mt940.models.Date
     - !!binary |
       B+EKCw==
+    entry_date_basis: statement_window
+    entry_date_raw: '1011'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: F
     guessed_entry_date: *id003
@@ -210,6 +213,9 @@ transactions:
     entry_date: &id005 !!python/object/apply:mt940.models.Date
     - !!binary |
       B+EKCw==
+    entry_date_basis: statement_window
+    entry_date_raw: '1011'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: F
     guessed_entry_date: *id005
@@ -247,6 +253,9 @@ transactions:
     entry_date: &id006 !!python/object/apply:mt940.models.Date
     - !!binary |
       B+EKCw==
+    entry_date_basis: statement_window
+    entry_date_raw: '1011'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: F
     guessed_entry_date: *id006

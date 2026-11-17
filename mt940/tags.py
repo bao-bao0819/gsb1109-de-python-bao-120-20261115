@@ -24,7 +24,7 @@ import re
 import typing
 from typing import TYPE_CHECKING, ClassVar
 
-from . import models
+from . import dates, models
 from .options import Options
 
 if TYPE_CHECKING:
@@ -32,10 +32,6 @@ if TYPE_CHECKING:
 
 #: Parent logger for tag diagnostics, including raw values on parse failure.
 logger = logging.getLogger(__name__)
-
-#: An entry date more than this many days away from the value date means the
-#: two fall in different years, so the entry date's year needs correcting.
-_YEAR_BOUNDARY_DAYS = 330
 
 #: What 5.0.0 captured of a ``:86:`` value: up to nine chunks of at most 65
 #: characters, each but the last optionally followed by a line break. Longer
@@ -600,6 +596,24 @@ class IntermediateOpeningBalance(BalanceBase):
     id: ClassVar[str | int] = '60M'
 
 
+def _entry_literal(month: object, day: object) -> str | None:
+    """Rebuild the ``MMDD`` entry literal from captured components.
+
+    Direct tag calls may supply integers, which lose leading zeroes. Numeric
+    values are therefore zero-padded to two digits; blank or missing parts
+    mean the entry date was absent.
+    """
+    parts: list[str] = []
+    for value in (month, day):
+        if isinstance(value, int):
+            parts.append(f'{value:02d}')
+        elif isinstance(value, str) and value.strip().isdigit():
+            parts.append(value.strip().zfill(2))
+        else:
+            return None
+    return ''.join(parts)
+
+
 class Statement(Tag):
     """Transaction line from ``:61:`` with amount, references and dates.
 
@@ -612,10 +626,14 @@ class Statement(Tag):
     Extra details have no length cap.
 
     Conversion adds ``date`` and replaces ``amount`` with an amount model. A
-    numeric entry month and day produce ``entry_date`` and its compatibility
-    alias ``guessed_entry_date``. Default post-processors remove raw date parts
-    and copy the latest statement reference. Optional groups remain ``None``
-    unless a processor removes or replaces them.
+    numeric entry month and day are resolved with
+    :func:`mt940.dates.resolve_entry_date` against the surrounding balance
+    dates and any configured :class:`mt940.EntryDateRules`. A unique result
+    fills ``entry_date`` and its compatibility alias ``guessed_entry_date``;
+    the literal and reason are recorded in ``entry_date_raw`` and
+    ``entry_date_basis``. Ambiguous or invalid literals leave both date fields
+    ``None`` and keep their candidates and status. Default post-processors
+    remove raw date parts and copy the latest statement reference.
 
     The collection reuses a trailing transaction with a false or missing
     ``id``. Otherwise this tag starts a transaction. A missing transaction-type
@@ -662,17 +680,18 @@ class Statement(Tag):
 
         Returns:
             The same mapping with model values. Missing ``currency`` uses the
-            collection currency, but an existing ``None`` is retained. Entry
-            dates initially use the value-date year. A difference of at least
-            330 days adjusts the entry year by one toward the value date. Both
-            entry-date keys refer to the same resolved model.
+            collection currency, but an existing ``None`` is retained. The
+            entry date is resolved from its ``MMDD`` literal, the balance
+            coverage window around the value date and the collection's
+            optional rules. A unique date fills both entry-date keys; an
+            unresolved literal stores ``None`` plus ``entry_date_raw``,
+            ``entry_date_basis``, ``entry_date_status`` and its candidates.
 
         Raises:
-            ValueError: The value date or initial same-year entry date is
-                invalid.
+            ValueError: The value date is invalid.
             decimal.InvalidOperation: The amount text is invalid.
 
-        The initial entry date is validated before its year can be corrected.
+        The current run date is never used to choose an entry year.
         """
         data = super().__call__(transactions, value)
         data.setdefault('currency', transactions.currency)
@@ -681,39 +700,20 @@ class Statement(Tag):
         )
         date = data['date'] = models.Date(**data)
 
-        entry_day = str(data.get('entry_day') or '')
-        entry_month = str(data.get('entry_month') or '')
-
-        if entry_day.isdigit() and entry_month.isdigit():
-            entry_date = models.Date(
-                day=entry_day, month=entry_month, year=str(date.year)
-            )
-            if (
-                date > entry_date
-                and (date - entry_date).days >= _YEAR_BOUNDARY_DAYS
-            ):
-                year = 1
-            elif (
-                entry_date > date
-                and (entry_date - date).days >= _YEAR_BOUNDARY_DAYS
-            ):
-                year = -1
-            else:
-                year = 0
-
-            # Correct the entry date's year when the entry date crosses a
-            # year boundary relative to the value date (issue #121). Both
-            # `entry_date` and `guessed_entry_date` expose the resolved value.
-            # `guessed_entry_date` is kept as a backwards-compatible alias.
-            if year:
-                entry_date = models.Date(
-                    day=entry_date.day,
-                    month=entry_date.month,
-                    year=entry_date.year + year,
-                )
-            data['entry_date'] = entry_date
-            data['guessed_entry_date'] = entry_date
-
+        raw = _entry_literal(data.get('entry_month'), data.get('entry_day'))
+        rules = getattr(transactions, 'entry_date_rules', None)
+        balances = getattr(transactions, '_balance_dates', None)
+        if isinstance(balances, list):
+            window = dates.balance_window(balances, date)
+        else:
+            window = dates.statement_window(transactions.data)
+        resolution = dates.resolve_entry_date(
+            raw,
+            date,
+            window=window,
+            rules=rules,
+        )
+        dates.apply_resolution(data, resolution)
         return data
 
 

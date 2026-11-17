@@ -144,6 +144,9 @@ transactions:
     entry_date: &id003 !!python/object/apply:mt940.models.Date
     - !!binary |
       B+EBEw==
+    entry_date_basis: value_date_year
+    entry_date_raw: 0119
+    entry_date_status: resolved
     extra_details: 911-TRANSAKCJA IPH
     funds_code: N
     guessed_entry_date: *id003
@@ -173,6 +176,9 @@ transactions:
     entry_date: &id005 !!python/object/apply:mt940.models.Date
     - !!binary |
       B+EBEw==
+    entry_date_basis: value_date_year
+    entry_date_raw: 0119
+    entry_date_status: resolved
     extra_details: 911-TRANSAKCJA IPH
     funds_code: N
     guessed_entry_date: *id005
@@ -202,6 +208,9 @@ transactions:
     entry_date: &id006 !!python/object/apply:mt940.models.Date
     - !!binary |
       B+EBEw==
+    entry_date_basis: value_date_year
+    entry_date_raw: 0119
+    entry_date_status: resolved
     extra_details: 911-TRANSAKCJA IPH
     funds_code: N
     guessed_entry_date: *id006

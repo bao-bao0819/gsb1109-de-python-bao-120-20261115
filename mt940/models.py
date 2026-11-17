@@ -32,6 +32,8 @@ from .options import Options
 if TYPE_CHECKING:
     from typing_extensions import Self
 
+    from .dates import EntryDateRules
+
 #: Sentinel for attributes that are absent, as opposed to ``None``.
 _MISSING = object()
 
@@ -550,6 +552,8 @@ class Transactions(Sequence[Transaction]):
             lists are shared. Assign a new list to customise one collection.
         transaction_boundary: Frozen set of extra tag slugs that start a new
             transaction. A following statement tag can fill the placeholder.
+        entry_date_rules: Optional bank limits used to resolve a year-less
+            entry date, or ``None`` for the compatibility fallback.
         DEFAULT_PROCESSORS: Default slot mapping, copied shallowly on
             construction and unpickling. Statement processors repair February
             dates, remove raw date parts and copy the statement reference. The
@@ -618,6 +622,11 @@ class Transactions(Sequence[Transaction]):
         """
         state = self.__dict__.copy()
         del state['processors']
+        # Balance dates are a transient index rebuilt from the source; keeping
+        # them in pickle or YAML state would duplicate every balance date.
+        state.pop('_balance_dates', None)
+        if state.get('entry_date_rules') is None:
+            state.pop('entry_date_rules', None)
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -634,10 +643,12 @@ class Transactions(Sequence[Transaction]):
         """
         self.__dict__.update(state)
         self.processors: Processors = self.DEFAULT_PROCESSORS.copy()
+        _ = self.__dict__.setdefault('_balance_dates', [])
         # Pickles written by 4.x predate transaction_boundary, and pickles
         # written by 5.0.0 predate options.
         _ = self.__dict__.setdefault('transaction_boundary', frozenset())
         _ = self.__dict__.setdefault('options', Options())
+        _ = self.__dict__.setdefault('entry_date_rules', None)
 
     def __init__(
         self,
@@ -646,6 +657,7 @@ class Transactions(Sequence[Transaction]):
         transaction_boundary: Iterable[str] | None = None,
         *,
         options: Options | None = None,
+        entry_date_rules: EntryDateRules | None = None,
     ) -> None:
         """Create an empty collection with tag and processor overrides.
 
@@ -661,10 +673,14 @@ class Transactions(Sequence[Transaction]):
                 extra boundaries.
             options: Parser switches. Omitted or ``None`` disables all ten
                 fields.
+            entry_date_rules: Optional bank limits for resolving a year-less
+                entry date. ``None`` uses the value-date fallback and the
+                transaction's coverage window.
 
         No tags or processors run until :meth:`parse` is called.
         """
         self.options: Options = options or Options()
+        self.entry_date_rules: EntryDateRules | None = entry_date_rules
         self.processors = self.DEFAULT_PROCESSORS.copy()
         self.tags: MutableMapping[int | str, mt940.tags.Tag] = dict(
             self.default_tags()
@@ -685,6 +701,10 @@ class Transactions(Sequence[Transaction]):
 
         self.transactions: list[Transaction] = []
         self.data: dict[str, Any] = {}
+        #: Balance dates seen in the current source, in source order. They
+        #: let an entry date use the coverage window around its value date
+        #: without assuming that a closing balance has already been parsed.
+        self._balance_dates: list[tuple[str, datetime.date]] = []
 
     @property
     def currency(self) -> str | None:
@@ -796,11 +816,49 @@ class Transactions(Sequence[Transaction]):
         matches = list(tag_re.finditer(data))
 
         valid_matches = self.sanitize_tag_id_matches(matches)
+        self._balance_dates = self._collect_balance_dates(valid_matches, data)
 
         for i, match in enumerate(valid_matches):
             self._process_match(match, i, valid_matches, data)
 
         return self.transactions
+
+    def _collect_balance_dates(
+        self,
+        matches: list[re.Match[str]],
+        data: str,
+    ) -> list[tuple[str, datetime.date]]:
+        """Read balance dates from the source before conversion begins.
+
+        A closing balance normally appears after its transactions, so reading
+        it only when its turn arrives would leave the transaction without the
+        upper end of its coverage window. Scanning the recognised markers
+        first makes the complete window available. Invalid or unrecognised
+        balance values are skipped here; normal parsing still reports them.
+
+        Args:
+            matches: Recognised tag markers in source order.
+            data: Normalised source text used for marker offsets.
+
+        Returns:
+            ``(slug, date)`` pairs for every parseable balance marker.
+        """
+        found: list[tuple[str, datetime.date]] = []
+        for index, match in enumerate(matches):
+            tag_id = self.normalize_tag_id(match.group('tag'))
+            tag = self.tags.get(match.group('full_tag')) or self.tags[tag_id]
+            if not isinstance(tag, mt940.tags.BalanceBase):
+                continue
+            if matches[index + 1 : index + 2]:
+                value = data[match.end() : matches[index + 1].start()].strip()
+            else:
+                value = data[match.end() :].strip()
+            try:
+                captured = tag.parse(self, value)
+                found.append((tag.slug, Date(**captured)))
+            except (KeyError, RuntimeError, ValueError):
+                continue
+        return found
 
     def _process_match(
         self,

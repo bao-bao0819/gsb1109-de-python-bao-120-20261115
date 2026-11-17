@@ -24,17 +24,21 @@ Example:
     <500.00 EUR>
 """
 
-from . import json, models, parser, processors, tags, utils
+from . import dates, json, models, parser, processors, tags, utils
 from .__about__ import __version__
+from .dates import EntryDateResolution, EntryDateRules
 from .json import JSONEncoder
 from .options import Options
 from .parser import parse, parse_statements
 
 #: Supported names exported by ``from mt940 import *``.
 __all__ = [
+    'EntryDateResolution',
+    'EntryDateRules',
     'JSONEncoder',
     'Options',
     '__version__',
+    'dates',
     'json',
     'models',
     'parse',

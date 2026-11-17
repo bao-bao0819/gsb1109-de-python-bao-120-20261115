@@ -125,6 +125,9 @@ transactions:
     entry_date: &id003 !!python/object/apply:mt940.models.Date
     - !!binary |
       B+ILGg==
+    entry_date_basis: value_date_year
+    entry_date_raw: '1126'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: R
     guessed_entry_date: *id003

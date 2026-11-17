@@ -152,6 +152,9 @@ transactions:
     entry_date: &id003 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9sFGA==
+    entry_date_basis: statement_window
+    entry_date_raw: '0524'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: null
     guessed_entry_date: *id003
@@ -179,6 +182,9 @@ transactions:
     entry_date: &id005 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9sFFw==
+    entry_date_basis: statement_window
+    entry_date_raw: '0523'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: null
     guessed_entry_date: *id005
@@ -202,6 +208,9 @@ transactions:
     entry_date: &id006 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9sFFw==
+    entry_date_basis: statement_window
+    entry_date_raw: '0523'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: null
     guessed_entry_date: *id006
@@ -226,6 +235,9 @@ transactions:
     entry_date: &id007 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9sFFw==
+    entry_date_basis: statement_window
+    entry_date_raw: '0523'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: null
     guessed_entry_date: *id007
@@ -249,6 +261,9 @@ transactions:
     entry_date: &id008 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9sFFw==
+    entry_date_basis: statement_window
+    entry_date_raw: '0523'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: null
     guessed_entry_date: *id008
@@ -273,6 +288,9 @@ transactions:
     entry_date: &id009 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9sFFw==
+    entry_date_basis: statement_window
+    entry_date_raw: '0523'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: null
     guessed_entry_date: *id009
@@ -297,6 +315,9 @@ transactions:
     entry_date: &id010 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9sFFw==
+    entry_date_basis: statement_window
+    entry_date_raw: '0523'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: null
     guessed_entry_date: *id010
@@ -320,6 +341,9 @@ transactions:
     entry_date: &id011 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9sFFw==
+    entry_date_basis: statement_window
+    entry_date_raw: '0523'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: null
     guessed_entry_date: *id011
@@ -343,6 +367,9 @@ transactions:
     entry_date: &id012 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9sFGA==
+    entry_date_basis: statement_window
+    entry_date_raw: '0524'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: null
     guessed_entry_date: *id012
@@ -366,6 +393,9 @@ transactions:
     entry_date: &id013 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9sFGA==
+    entry_date_basis: statement_window
+    entry_date_raw: '0524'
+    entry_date_status: resolved
     extra_details: ''
     funds_code: null
     guessed_entry_date: *id013

@@ -57,9 +57,25 @@ With the default ``:61:`` parser and processors, fields include:
      - ``Date``
      - Value date from ``YYMMDD``.
    * - ``entry_date``, ``guessed_entry_date``
-     - ``Date``
-     - Optional entry month/day, with inferred year. Both keys refer to the
-       same resolved date when present.
+     - ``Date`` or ``None``
+     - Optional entry month/day, with an inferred year. Both keys refer to the
+       same value. ``None`` means the literal could not be resolved uniquely.
+   * - ``entry_date_raw``
+     - ``str``
+     - Original ``MMDD`` literal, retained even when unresolved or invalid.
+   * - ``entry_date_basis``
+     - ``str``
+     - Why a year was chosen, such as ``statement_window`` or ``bank_rule``.
+   * - ``entry_date_status``
+     - ``str``
+     - ``resolved``, ``ambiguous``, ``invalid``, ``outside_window``,
+       ``outside_bank_rule`` or ``window_required``.
+   * - ``entry_date_candidates``
+     - ``list[Date]``
+     - Accepted dates when more than one year remains possible, oldest first.
+   * - ``entry_date_explanation``
+     - ``str``
+     - Human-readable account of the literal, value date, window and outcome.
    * - ``amount``
      - ``Amount``
      - Signed amount. ``amount.amount`` is a ``Decimal``.
@@ -138,11 +154,26 @@ standard date classes. Tag-derived two-digit years become years in the 2000s.
 The default statement pre-processor repairs certain out-of-range February
 value dates. Invalid model dates can still raise ``ValueError``.
 
-Entry dates have no year in the input. The parser first tries the value date's
-year and moves it by one year when the difference is at least 330 days. Both
-``entry_date`` and ``guessed_entry_date`` expose that result. The initial date
-is validated before the year correction, which limits leap-day recovery.
-The ``timezone_offset`` option controls interpretation of ``:13D:`` offsets.
+Entry dates have no year in the input. The parser resolves them without
+consulting the current date. It first uses the balance dates surrounding the
+transaction as an inclusive coverage window, then optional bank limits passed
+as :class:`mt940.EntryDateRules`, and finally the value date's year. Candidates
+more than 330 days from the value date are not posting delays and are dropped.
+
+A unique candidate becomes ``entry_date`` and its ``guessed_entry_date``
+alias. When more than one year remains possible, both fields are ``None`` and
+the possible dates are listed in ``entry_date_candidates``. Invalid month/day
+pairs (``0230``, or ``0229`` outside a leap year) are reported as ``invalid``
+and are never rolled into the following month. Every attempted resolution
+keeps ``entry_date_raw``, ``entry_date_basis`` and ``entry_date_status``.
+Unresolved results also carry ``entry_date_explanation`` and, when several
+years remain possible, ``entry_date_candidates``.
+
+The year is never taken from the run date, so parsing the same statement on a
+different day produces the same result. Opening and closing balances bound a
+transaction by date rather than by source position, which keeps concatenated
+statements from borrowing each other's coverage. The ``timezone_offset``
+option controls interpretation of ``:13D:`` offsets.
 
 Balances are stored under tag-specific names such as
 ``final_opening_balance`` and ``intermediate_closing_balance``. Later balances

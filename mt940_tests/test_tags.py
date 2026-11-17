@@ -514,6 +514,11 @@ def test_asnb_tags(
             first_expected_transaction_data['guessed_entry_date'] = (
                 first_expected_entry_date
             )
+            first_expected_transaction_data['entry_date_raw'] = '0101'
+            first_expected_transaction_data['entry_date_basis'] = (
+                'statement_window'
+            )
+            first_expected_transaction_data['entry_date_status'] = 'resolved'
 
         assert trs.transactions[0].data == first_expected_transaction_data
 
@@ -557,6 +562,11 @@ def test_asnb_tags(
             last_expected_transaction_data['guessed_entry_date'] = (
                 last_expected_entry_date
             )
+            last_expected_transaction_data['entry_date_raw'] = '0131'
+            last_expected_transaction_data['entry_date_basis'] = (
+                'statement_window'
+            )
+            last_expected_transaction_data['entry_date_status'] = 'resolved'
         assert trs.transactions[7].data == last_expected_transaction_data
         assert td[0:46] == ('NL08ABNA9999999999 international card services')
         assert td[47:112] == (

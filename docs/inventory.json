@@ -10,6 +10,8 @@
     ],
     "symbols": [
       "mt940",
+      "mt940.EntryDateResolution",
+      "mt940.EntryDateRules",
       "mt940.JSONEncoder",
       "mt940.Options",
       "mt940.__all__",
@@ -59,6 +61,60 @@
       "mt940._types.Processors",
       "mt940._types.Source",
       "mt940._types.TagDict"
+    ]
+  },
+  "mt940.dates": {
+    "reference": "mt940.dates.html",
+    "guides": [
+      "data-model.html",
+      "customising.html"
+    ],
+    "tests": [
+      "mt940_tests/test_entry_dates.py"
+    ],
+    "symbols": [
+      "mt940.dates",
+      "mt940.dates.DEFAULT_RULES",
+      "mt940.dates.EntryDateResolution",
+      "mt940.dates.EntryDateResolution.basis",
+      "mt940.dates.EntryDateResolution.calendar_candidates",
+      "mt940.dates.EntryDateResolution.candidates",
+      "mt940.dates.EntryDateResolution.date",
+      "mt940.dates.EntryDateResolution.explanation",
+      "mt940.dates.EntryDateResolution.raw",
+      "mt940.dates.EntryDateResolution.rules",
+      "mt940.dates.EntryDateResolution.status",
+      "mt940.dates.EntryDateResolution.value_date",
+      "mt940.dates.EntryDateResolution.window",
+      "mt940.dates.EntryDateRules",
+      "mt940.dates.EntryDateRules.__post_init__",
+      "mt940.dates.EntryDateRules.max_days_after_value",
+      "mt940.dates.EntryDateRules.max_days_before_value",
+      "mt940.dates.EntryDateRules.max_days_from_value",
+      "mt940.dates.EntryDateRules.name",
+      "mt940.dates.EntryDateRules.require_window",
+      "mt940.dates.EntryDateRules.window_end",
+      "mt940.dates.EntryDateRules.window_start",
+      "mt940.dates.EntryDateRules.years_after",
+      "mt940.dates.EntryDateRules.years_before",
+      "mt940.dates._LITERAL_LENGTH",
+      "mt940.dates._MAX_ENTRY_GAP_DAYS",
+      "mt940.dates._MAX_WINDOW_DAYS",
+      "mt940.dates._as_date",
+      "mt940.dates._basis",
+      "mt940.dates._calendar_candidates",
+      "mt940.dates._candidate_years",
+      "mt940.dates._effective_window",
+      "mt940.dates._explanation",
+      "mt940.dates._near_value_date",
+      "mt940.dates._resolution",
+      "mt940.dates._within_rule",
+      "mt940.dates._within_window",
+      "mt940.dates.apply_resolution",
+      "mt940.dates.balance_window",
+      "mt940.dates.models",
+      "mt940.dates.resolve_entry_date",
+      "mt940.dates.statement_window"
     ]
   },
   "mt940.json": {
@@ -143,6 +199,8 @@
       "mt940.models.Transactions.__len__",
       "mt940.models.Transactions.__repr__",
       "mt940.models.Transactions.__setstate__",
+      "mt940.models.Transactions._balance_dates",
+      "mt940.models.Transactions._collect_balance_dates",
       "mt940.models.Transactions._process_match",
       "mt940.models.Transactions._process_statement_tag",
       "mt940.models.Transactions._update_transaction",
@@ -150,6 +208,7 @@
       "mt940.models.Transactions.data",
       "mt940.models.Transactions.defaultTags",
       "mt940.models.Transactions.default_tags",
+      "mt940.models.Transactions.entry_date_rules",
       "mt940.models.Transactions.normalize_tag_id",
       "mt940.models.Transactions.options",
       "mt940.models.Transactions.parse",
@@ -381,8 +440,9 @@
       "mt940.tags.TransactionReferenceNumber.id",
       "mt940.tags.TransactionReferenceNumber.pattern",
       "mt940.tags._LEGACY_DETAILS_RE",
-      "mt940.tags._YEAR_BOUNDARY_DAYS",
+      "mt940.tags._entry_literal",
       "mt940.tags._options_of",
+      "mt940.tags.dates",
       "mt940.tags.logger",
       "mt940.tags.models"
     ]
