@@ -49,6 +49,46 @@ properties, you can get an array of relative time values for the data using the
 In addition, if the ``wf_start_time`` property is set,
 you can pass ``absolute_time=True`` to get an array of absolute times in UTC.
 
+Time properties can change between segments
+--------------------------------------------
+
+A channel's ``wf_increment``, ``wf_start_offset`` or ``wf_start_time`` can be
+written again on each segment. When a file contains multiple segments of data
+for a channel, ``time_track`` uses the properties that were in effect in each
+segment, so a changed sampling interval is represented correctly and a stopped
+acquisition is not filled with invented samples.
+
+To inspect and query that segment breakdown explicitly, use
+:py:meth:`~nptdms.TdmsChannel.segment_timeline`:
+
+.. code-block:: python
+
+    timeline = channel.segment_timeline()
+    for span in timeline:
+        print(span.segment_index, span.start_index, span.stop_index,
+              span.increment, span.start_time)
+
+    timestamp = channel.time_at(1000)              # sample -> time
+    sample_index = channel.sample_index_at(timestamp)  # time -> sample
+
+Each span reports the exact half-open sample range it owns in the complete
+channel (``start_index`` to ``stop_index``), so segment starts and sample
+ordinals are never rounded away. A physical break between runs is reported by
+``gap_before`` and ``gap_segments``; no samples are created for the interval.
+Segments that repeat the same ``wf_start_time`` and offset while remaining
+adjacent are treated as one continuing acquisition, while a changed absolute
+start or offset is placed exactly as declared.
+When two segments overlap in time, both remain available:
+``samples_at_time`` returns one result per source, and the single-result
+lookups raise :py:class:`~nptdms.segment_timeline.AmbiguousTimeError` instead
+of silently choosing one. ``timeline.to_dict()`` returns the same information
+in a JSON-friendly form.
+
+If every data run has an absolute ``wf_start_time``, gaps and overlaps are
+placed using those exact times. If a run has no absolute time and no adjacent
+sample clock to continue, its relative start is reported but
+``start_is_unknown`` is true rather than claiming a continuous timeline.
+
 A TDMS file, group and channel can all have properties associated with them, so each of the
 :py:class:`~nptdms.TdmsFile`, :py:class:`~nptdms.TdmsGroup` and :py:class:`~nptdms.TdmsChannel`
 classes provide access to these properties as a dictionary using their ``properties`` attribute::

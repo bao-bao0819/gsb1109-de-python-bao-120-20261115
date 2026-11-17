@@ -18,6 +18,7 @@ from nptdms.log import log_manager
 log = log_manager.get_logger(__name__)
 _struct_unpack = struct.unpack
 _NEW_OBJECT_LIST = toc_properties['kTocMetaData'] | toc_properties['kTocNewObjList']
+_TIME_PROPERTY_NAMES = ('wf_increment', 'wf_start_offset', 'wf_start_time')
 
 
 class TdmsReader(object):
@@ -41,6 +42,8 @@ class TdmsReader(object):
         self._prev_segment_objects = {}
         self.object_metadata = OrderedDict()
         self._segment_channel_offsets = {}
+        self._current_time_properties = {}
+        self._channel_segment_time_properties = {}
         self.tdms_version = None
 
         if hasattr(tdms_file, "read"):
@@ -129,6 +132,7 @@ class TdmsReader(object):
                         segment.dependencies = self._get_dependencies(segment)
                     self._update_object_metadata(segment, record_byte_ranges)
                     self._update_object_properties(properties, segment if record_byte_ranges else None)
+                    self._record_channel_time_segments(segment, properties)
                     self._segments.append(segment)
                     previous_segment = segment
 
@@ -392,6 +396,48 @@ class TdmsReader(object):
                     object_metadata.properties[prop] = val
                 if byte_ranges_segment is not None:
                     _add_segment(object_metadata, byte_ranges_segment)
+
+    def _record_channel_time_segments(self, segment, segment_object_properties):
+        """ Record the time properties and data run for every channel in a segment.
+
+        Channel properties are cumulative when a file is read, so the effective
+        values for a segment must be captured before later segments overwrite
+        them.  Only segments that actually contain samples create a run;
+        segments without data represent a break, not interpolatable samples.
+        """
+        if segment_object_properties is not None:
+            for path, properties in segment_object_properties.items():
+                time_properties = self._current_time_properties.setdefault(path, OrderedDict())
+                for prop, val in properties:
+                    if prop in _TIME_PROPERTY_NAMES:
+                        time_properties[prop] = val
+
+        for segment_object in segment.ordered_objects:
+            path = segment_object.path
+            if not segment_object.has_data:
+                continue
+            num_values = _number_of_segment_values(segment_object, segment)
+            if num_values <= 0:
+                continue
+            properties = OrderedDict(self._current_time_properties.get(path, {}))
+            runs = self._channel_segment_time_properties.setdefault(path, [])
+            runs.append((segment.index, num_values, properties))
+
+    def get_channel_data_segments(self, channel_path):
+        """ Get the runs of data for a channel and their effective time properties
+
+        :returns: List of ``(segment_index, start_sample_index, sample_count, properties)``.
+            Properties are the values in effect for that segment, not the file-wide final values.
+        """
+        if self._segments is None:
+            raise RuntimeError("Cannot read data unless metadata has first been read")
+        runs = []
+        start_index = 0
+        for (segment_index, sample_count, properties) in \
+                self._channel_segment_time_properties.get(channel_path, []):
+            runs.append((segment_index, start_index, sample_count, properties))
+            start_index += sample_count
+        return runs
 
     def _get_dependencies(self, segment):
         """ Get the indexes of the earlier segments that are required to read the metadata of a segment

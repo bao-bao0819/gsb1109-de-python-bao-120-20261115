@@ -15,6 +15,7 @@ from nptdms.channel_data import get_data_receiver, slice_raw_data
 from nptdms.export import hdf_export, pandas_export
 from nptdms.base_segment import RawChannelDataChunk
 from nptdms.timestamp import TdmsTimestamp, TimestampArray
+from nptdms.segment_timeline import AmbiguousTimeError, build_channel_timeline
 
 
 log = log_manager.get_logger(__name__)
@@ -720,6 +721,85 @@ class TdmsChannel(object):
                 return raw_data.scaler_data
             return raw_data.data
 
+    def segment_timeline(self, accuracy='ns'):
+        """ Get the time information for each segment that contains this channel's data
+
+        Unlike :meth:`time_track`, this keeps the waveform properties that were
+        in effect in each physical segment.  If the sampling interval changed
+        between segments, or acquisition stopped between segments, the
+        returned :class:`~nptdms.segment_timeline.ChannelSegmentTimeline`
+        represents that as separate spans instead of interpolating across it.
+        Segments that overlap in time are all retained in file order.
+
+        Each span reports its exact channel sample range (``start_index`` up
+        to but excluding ``stop_index``), its increment, and its start time.
+        Use :meth:`~nptdms.segment_timeline.ChannelSegmentTimeline.time_at_sample`
+        and ``samples_at_time`` to convert between sample indexes and times.
+        ``to_dict`` gives a JSON-friendly view of the same information.
+
+        :param accuracy: NumPy datetime64 unit used for absolute times.
+        :rtype: :class:`nptdms.segment_timeline.ChannelSegmentTimeline`
+        :raises: KeyError if any data segment lacks wf_increment
+        """
+        return build_channel_timeline(self, accuracy=accuracy)
+
+    def segment_times(self, absolute_time=False, accuracy='ns'):
+        """ Sample times for this channel using each segment's own time properties
+
+        This is the segment-aware counterpart to :meth:`time_track`.  The
+        result has one entry per sample, keeps the exact sample order of the
+        channel, and does not fill stopped-acquisition gaps with samples.
+
+        :param absolute_time: Return absolute times rather than seconds
+            relative to the first segment.
+        :param accuracy: NumPy datetime64 unit used for absolute times.
+        :rtype: NumPy array.
+        :raises: KeyError if time properties aren't found
+        """
+        return self.segment_timeline(accuracy=accuracy).time_track(
+            absolute_time=absolute_time, accuracy=accuracy)
+
+    def time_at(self, sample_index, absolute_time=False, accuracy='ns'):
+        """ Get the time of a sample using its segment's time properties
+
+        Negative indices are supported in the same way as normal channel
+        indexing.
+
+        :param sample_index: Index in the complete channel.
+        :param absolute_time: Return an absolute time rather than seconds
+            relative to the first segment.
+        :param accuracy: NumPy datetime64 unit used for absolute times.
+        :rtype: float or numpy.datetime64
+        :raises: IndexError if the index is outside the channel
+        """
+        return self.segment_timeline(accuracy=accuracy).time_at_sample(
+            sample_index, absolute_time=absolute_time, accuracy=accuracy)
+
+    def sample_at(self, time, absolute_time=None, accuracy='ns'):
+        """ Find the sample with the given time
+
+        :param time: Seconds relative to the timeline start, or an absolute
+            datetime64 value.
+        :param absolute_time: Override whether ``time`` is absolute.
+        :param accuracy: NumPy datetime64 unit used for absolute times.
+        :returns: :class:`~nptdms.segment_timeline.SamplePosition`
+        :raises: AmbiguousTimeError if overlapping segments contain the time,
+            KeyError if no sample has the time.
+        """
+        return self.segment_timeline(accuracy=accuracy).sample_at_time(
+            time, absolute_time=absolute_time)
+
+    def samples_at(self, time, absolute_time=None):
+        """ Find every sample at the given time, including overlapping segments
+
+        :returns: List of :class:`~nptdms.segment_timeline.SamplePosition`
+        """
+        return self.segment_timeline().samples_at_time(time, absolute_time=absolute_time)
+
+    def sample_index_at(self, time, absolute_time=None):
+        """ Get the sample index for a time when exactly one sample matches """
+        return self.segment_timeline().sample_index_at_time(time, absolute_time=absolute_time)
+
     def time_track(self, absolute_time=False, accuracy='ns'):
         """Return an array of time or the independent variable for this channel
 
@@ -750,6 +830,9 @@ class TdmsChannel(object):
             offset = self.properties['wf_start_offset']
         except KeyError:
             raise KeyError("Object does not have time properties available.")
+
+        if self._has_multiple_time_segments():
+            return self.segment_times(absolute_time=absolute_time, accuracy=accuracy)
 
         relative_time = np.linspace(
             offset,
@@ -801,6 +884,32 @@ class TdmsChannel(object):
         return pandas_export.from_channel(
             self, time_index=time_index, absolute_time=absolute_time, scaled_data=scaled_data,
             arrow_dtypes=arrow_dtypes)
+
+    def _has_multiple_time_segments(self):
+        reader = self._reader
+        if reader is None:
+            return False
+        try:
+            runs = reader.get_channel_data_segments(self.path)
+        except RuntimeError:
+            return False
+        if not runs:
+            return False
+        if len(runs) > 1:
+            return all('wf_increment' in properties for (_, _, _, properties) in runs)
+        # One data run can still have different effective properties if later
+        # metadata-only segments overwrite the channel's cumulative properties.
+        properties = runs[0][3]
+        if 'wf_increment' not in properties:
+            return False
+        if properties.get('wf_increment') != self.properties.get('wf_increment'):
+            return True
+        if properties.get('wf_start_offset') != self.properties.get('wf_start_offset'):
+            return True
+        # A start time added by a later metadata-only segment applies to the
+        # channel but not to already written samples, so keep the data run's
+        # own snapshot rather than using the newer value.
+        return False
 
     def _read_data_values(self):
         for chunk in self.data_chunks():

@@ -33,6 +33,20 @@ Reading TDMS Files
 .. autoclass:: nptdms.tdms.ChannelSegmentStatus()
   :members:
 
+.. module:: nptdms.segment_timeline
+
+.. autoclass:: ChannelSegmentTimeline()
+  :members:
+
+.. autoclass:: SegmentTimeSpan()
+  :members:
+
+.. autoclass:: SamplePosition()
+
+.. autoclass:: AmbiguousTimeError()
+
+.. module:: nptdms
+
 .. autofunction:: merge_byte_ranges
 
 .. autofunction:: extract_segments
