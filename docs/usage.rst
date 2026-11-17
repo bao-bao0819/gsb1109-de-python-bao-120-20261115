@@ -21,6 +21,9 @@ application makes after that first parse.
    * - Amounts, dates, balances and optional fields
      - :class:`mt940.models.Transactions`
      - :doc:`data-model`
+   * - Canonical directions, reversal pairs and exact nets
+     - :func:`mt940.clean`
+     - :doc:`data-model`
    * - JSON for storage or another service
      - :class:`mt940.JSONEncoder`
      - :doc:`json`

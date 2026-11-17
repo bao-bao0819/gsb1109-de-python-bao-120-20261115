@@ -42,6 +42,9 @@ ignore = [
 'mt940/{json,models,options,parser,processors,tags}.py' = [
     'docstring-extraneous-exception',
 ]
+# Cleaning delegates validation to private helpers, so DOC501 cannot see the
+# raises documented on the public `clean` function.
+'mt940/cleaning.py' = ['docstring-extraneous-exception']
 'mt940_tests/**' = [
     # Tests assert, compare against literal expected values, are documented
     # by their names, poke at private helpers on purpose and may carry bank

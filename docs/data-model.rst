@@ -130,6 +130,83 @@ Choose sufficient precision before parsing if your application changes the
 default decimal context or processes very long amounts. Avoid converting money
 to ``float`` for calculations or export.
 
+Clean directions and reversals
+------------------------------
+
+:func:`mt940.clean` keeps every parsed occurrence and adds the canonical flow
+implied by its mark. ``C`` and ``RD`` credit the account; ``D`` and ``RC``
+debit it. Cleaning never negates the parsed ``Amount`` again: it reads the
+stored magnitude and signs it once, so an ``RC`` parsed as ``-10.00`` by
+``reversal_sign`` stays a debit of ``10.00`` rather than returning to credit.
+
+.. doctest::
+
+   >>> import mt940
+   >>> source: str = """:20:EXAMPLE
+   ... :60F:C260101EUR100,00
+   ... :61:2601020101C10,00NTRFREF-A
+   ... :61:2601020101RC10,00NTRFREF-B
+   ... :62F:C260102EUR100,00
+   ... """
+   >>> cleaned: mt940.Cleaning = mt940.clean(mt940.parse(source))
+   >>> [(entry.status, entry.original_amount, entry.net_amount)
+   ...  for entry in cleaned.occurrences]
+   [('C', Decimal('10.00'), Decimal('10.00')),
+    ('RC', Decimal('10.00'), Decimal('-10.00'))]
+   >>> cleaned.net_amount('EUR')
+   Decimal('0.00')
+
+Each :class:`mt940.CleanedEntry` retains the original ``status``, original
+signed ``original_amount`` and canonical ``net_amount``. The transaction object
+is available as ``entry.transaction`` and is not modified.
+
+Nets are grouped by the amount's own currency. No conversion is attempted and
+amounts without a currency form a separate ``None`` key in
+``cleaned.net_amounts``. Totals are computed from decimal digits rather than
+the active context, so a low precision setting cannot round them.
+
+Two offsetting entries are only removed from ``cleaned.effective`` when they
+share a non-empty business reference under one of
+:data:`mt940.cleaning.DEFAULT_ASSOCIATION_KEYS`. The shared reference must
+belong to the same currency and absolute amount. Both sides remain in
+``cleaned.occurrences``, and every detected pair is in ``cleaned.reversals``.
+An offsetting pair without a shared reference remains in ``effective`` and is
+listed in ``cleaned.unassociated_reversals``; it is not silently deleted.
+
+.. doctest::
+
+   >>> paired: mt940.Cleaning = mt940.clean(
+   ...     mt940.parse(
+   ...         ':20:EXAMPLE\n:60F:C260101EUR0,00\n'
+   ...         ':61:2601020101C5,00NTRFLINK//BANK\n'
+   ...         ':61:2601020101RC5,00NTRFLINK//BANK\n'
+   ...     )
+   ... )
+   >>> len(paired.occurrences), len(paired.effective), paired.net_amount('EUR')
+   (2, 0, Decimal('0.00'))
+   >>> unlinked: mt940.Cleaning = mt940.clean(
+   ...     mt940.parse(
+   ...         ':20:EXAMPLE\n:60F:C260101EUR0,00\n'
+   ...         ':61:2601020101C5,00NTRF\n'
+   ...         ':61:2601020101RC5,00NTRF\n'
+   ...     )
+   ... )
+   >>> len(unlinked.occurrences), len(unlinked.effective)
+   (2, 2)
+   >>> len(unlinked.unassociated_reversals)
+   1
+
+``transaction_reference`` is deliberately not an association key: the default
+processor copies the statement reference into every transaction, so it cannot
+distinguish a reversal from its original. Pass ``association_keys`` to
+:func:`mt940.clean` (or :meth:`mt940.models.Transactions.clean`) for
+bank-specific links such as a payment identifier stored in ``purpose``.
+An empty iterable disables association so every offsetting pair remains in
+``effective``.
+
+Cleaning is separate from parsing. It does not change tag output, the
+``Amount`` stored on a transaction, or balance reconciliation.
+
 Dates, time and balances
 ------------------------
 

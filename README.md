@@ -66,6 +66,9 @@ on its tag and processors.
 - Use `json.dumps(statement, cls=mt940.JSONEncoder)` to export metadata and
   transactions. Decimal values become strings. There is no matching decoder
   that reconstructs the models.
+- Use `mt940.clean(statement)` for canonical directions (`C`/`RD` in,
+  `D`/`RC` out), per-currency exact nets and retained occurrences. The parsed
+  amount is not negated again.
 
 The [usage guide](https://mt940.readthedocs.io/en/latest/usage.html) explains
 these choices. The [API reference](https://mt940.readthedocs.io/en/latest/modules.html)

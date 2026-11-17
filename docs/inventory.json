@@ -10,10 +10,15 @@
     ],
     "symbols": [
       "mt940",
+      "mt940.CleanedEntry",
+      "mt940.Cleaning",
+      "mt940.Direction",
       "mt940.JSONEncoder",
       "mt940.Options",
+      "mt940.ReversalPair",
       "mt940.__all__",
       "mt940.__version__",
+      "mt940.clean",
       "mt940.parse",
       "mt940.parse_statements"
     ]
@@ -61,6 +66,67 @@
       "mt940._types.TagDict"
     ]
   },
+  "mt940.cleaning": {
+    "reference": "mt940.cleaning.html",
+    "guides": [
+      "data-model.html"
+    ],
+    "tests": [
+      "mt940_tests/test_cleaning.py"
+    ],
+    "symbols": [
+      "mt940.cleaning",
+      "mt940.cleaning.CleanedEntry",
+      "mt940.cleaning.CleanedEntry.currency",
+      "mt940.cleaning.CleanedEntry.data",
+      "mt940.cleaning.CleanedEntry.direction",
+      "mt940.cleaning.CleanedEntry.index",
+      "mt940.cleaning.CleanedEntry.is_reversal",
+      "mt940.cleaning.CleanedEntry.net_amount",
+      "mt940.cleaning.CleanedEntry.original_amount",
+      "mt940.cleaning.CleanedEntry.original_direction",
+      "mt940.cleaning.CleanedEntry.status",
+      "mt940.cleaning.CleanedEntry.transaction",
+      "mt940.cleaning.Cleaning",
+      "mt940.cleaning.Cleaning.__init__",
+      "mt940.cleaning.Cleaning.associated_reversals",
+      "mt940.cleaning.Cleaning.effective",
+      "mt940.cleaning.Cleaning.net_amount",
+      "mt940.cleaning.Cleaning.net_amounts",
+      "mt940.cleaning.Cleaning.occurrences",
+      "mt940.cleaning.Cleaning.occurrences_for",
+      "mt940.cleaning.Cleaning.reversals",
+      "mt940.cleaning.Cleaning.unassociated_reversals",
+      "mt940.cleaning.DEFAULT_ASSOCIATION_KEYS",
+      "mt940.cleaning.Direction",
+      "mt940.cleaning.Direction.CREDIT",
+      "mt940.cleaning.Direction.DEBIT",
+      "mt940.cleaning.ReversalPair",
+      "mt940.cleaning.ReversalPair.associated",
+      "mt940.cleaning.ReversalPair.association_key",
+      "mt940.cleaning.ReversalPair.association_value",
+      "mt940.cleaning.ReversalPair.first",
+      "mt940.cleaning.ReversalPair.second",
+      "mt940.cleaning.STATUS_DIRECTIONS",
+      "mt940.cleaning.STATUS_ORIGINAL_DIRECTIONS",
+      "mt940.cleaning._association_keys",
+      "mt940.cleaning._association_values",
+      "mt940.cleaning._canonical_amount",
+      "mt940.cleaning._cleaned_entries",
+      "mt940.cleaning._direction",
+      "mt940.cleaning._exact_sum",
+      "mt940.cleaning._is_reversal",
+      "mt940.cleaning._magnitude",
+      "mt940.cleaning._match_associated",
+      "mt940.cleaning._match_unassociated",
+      "mt940.cleaning._original_direction",
+      "mt940.cleaning._pair_reversals",
+      "mt940.cleaning._reversal_pair",
+      "mt940.cleaning._shared_association",
+      "mt940.cleaning.clean",
+      "mt940.cleaning.models"
+    ]
+  },
   "mt940.json": {
     "reference": "mt940.json.html",
     "guides": [
@@ -86,6 +152,7 @@
       "internals.html"
     ],
     "tests": [
+      "mt940_tests/test_cleaning.py",
       "mt940_tests/test_models.py",
       "mt940_tests/test_parse.py"
     ],
@@ -146,6 +213,7 @@
       "mt940.models.Transactions._process_match",
       "mt940.models.Transactions._process_statement_tag",
       "mt940.models.Transactions._update_transaction",
+      "mt940.models.Transactions.clean",
       "mt940.models.Transactions.currency",
       "mt940.models.Transactions.data",
       "mt940.models.Transactions.defaultTags",

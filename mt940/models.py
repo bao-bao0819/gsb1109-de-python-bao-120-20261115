@@ -32,6 +32,8 @@ from .options import Options
 if TYPE_CHECKING:
     from typing_extensions import Self
 
+    from .cleaning import Cleaning
+
 #: Sentinel for attributes that are absent, as opposed to ``None``.
 _MISSING = object()
 
@@ -940,6 +942,29 @@ class Transactions(Sequence[Transaction]):
             IndexError: An integer index is out of range.
         """
         return self.transactions[key]
+
+    def clean(
+        self,
+        *,
+        association_keys: Iterable[str] | None = None,
+    ) -> Cleaning:
+        """Return canonical directions, exact nets and retained occurrences.
+
+        The source mark and parsed amount stay untouched. See
+        :func:`mt940.cleaning.clean` for the sign, currency and association
+        rules.
+
+        Args:
+            association_keys: Fields that link a reversal to its original
+                entry. ``None`` uses the documented defaults.
+
+        Returns:
+            A :class:`mt940.cleaning.Cleaning` over this collection's
+            transactions in their current order.
+        """
+        return mt940.cleaning.clean(
+            self.transactions, association_keys=association_keys
+        )
 
     def __len__(self) -> int:
         """Return the number of transactions."""

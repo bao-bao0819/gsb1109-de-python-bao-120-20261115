@@ -117,3 +117,8 @@ These switches do not repair every format issue. They do not split ``:28C:``
 pages, retain every intermediate balance, validate reconciliation, give bare
 ``:90:`` a status, or guarantee one transaction per ``:61:`` with a missing ID.
 They also do not change the active decimal context used during debit negation.
+
+The switches only affect the stored ``Amount``. :func:`mt940.clean` derives a
+canonical direction from the mark and signs the stored magnitude once, so its
+result is the same whether or not ``reversal_sign`` was enabled: ``RC`` is a
+debit and ``RD`` is a credit either way. See :doc:`data-model`.
