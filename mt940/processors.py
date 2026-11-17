@@ -6,6 +6,12 @@ the mapping supplied to the next step. Post-processors additionally receive
 run in configured list order and their exceptions propagate unchanged. The
 current tag's result has not yet been stored on the collection.
 
+With ``Options(process_sources=True)`` the collection records every field a
+processor actually changes in ``Transactions.process_sources`` as
+:class:`FieldChange` entries carrying the tag slug, phase, processor name and
+the before/after values. The switch is opt-in and only affects this audit
+trail: the parsed results are identical with it enabled or disabled.
+
 Register functions under ``pre_<tag.slug>`` or ``post_<tag.slug>`` in
 ``Transactions.processors`` or the high-level parsing functions. A supplied
 list replaces the entire default slot. For example, to add currency while
@@ -31,16 +37,184 @@ from __future__ import annotations
 
 import calendar
 import collections
+import dataclasses
 import functools
 import re
 from typing import TYPE_CHECKING, Any
 
 # Runtime re-exports: 5.0.0 exposed the processor protocols here.
-from ._types import PostProcessor, PreProcessor  # noqa: TC001
+from ._types import (  # noqa: TC001
+    PostProcessor,
+    PreProcessor,
+    Processor,
+    TagDict,
+)
 from .options import Options
 
 if TYPE_CHECKING:
     from . import models, tags
+
+
+class _MissingMarker:
+    """Marker used in :class:`FieldChange` for a key that is absent.
+
+    All instances compare equal because unpickling builds a fresh object
+    instead of restoring the module singleton. The dataclass records therefore
+    keep their equality and the :class:`FieldChange` added/removed properties
+    recognise an unpickled marker.
+    """
+
+    def __repr__(self) -> str:
+        """Return the marker's fixed display text."""
+        return '<missing>'
+
+    def __eq__(self, other: object) -> bool:
+        """Return whether another object is also a missing marker."""
+        return isinstance(other, _MissingMarker)
+
+    def __hash__(self) -> int:
+        """Return the shared hash missing markers compare by."""
+        return hash(_MissingMarker)
+
+
+#: Shared marker for the missing side of an added or removed mapping key.
+_MISSING = _MissingMarker()
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class FieldChange:
+    """One field value change attributed to a single processor call.
+
+    Records are appended to ``Transactions.process_sources`` only when
+    ``Options.process_sources`` is enabled. They describe the mapping a
+    processor returned, not the value the parser stores afterwards, so later
+    tag scoping and merging are not reflected. A field a processor leaves
+    unchanged creates no record.
+
+    Attributes:
+        tag: Slug of the tag whose pipeline ran, for example ``statement``.
+        field: Name of the mapping key whose value changed.
+        phase: ``pre`` for a pre-processor editing captures, ``post`` for a
+            post-processor editing a converted result.
+        processor: Qualified name of the callback. A closure keeps its nested
+            ``__qualname__`` and :func:`functools.partial` is rendered as
+            ``partial(...)`` around its wrapped function.
+        before: Value immediately before the processor ran. When the processor
+            added the key, this is the private missing marker and
+            :attr:`added` is true.
+        after: Value immediately after the processor ran. When the processor
+            removed the key, this is the private missing marker and
+            :attr:`removed` is true.
+    """
+
+    tag: str
+    field: str
+    phase: str
+    processor: str
+    before: Any
+    after: Any
+
+    @property
+    def added(self) -> bool:
+        """Whether the processor created a key that was absent before."""
+        return isinstance(self.before, _MissingMarker)
+
+    @property
+    def removed(self) -> bool:
+        """Whether the processor deleted a key that was present before."""
+        return isinstance(self.after, _MissingMarker)
+
+
+def _processor_name(processor: Processor) -> str:
+    """Return a stable, qualified name for a processor object.
+
+    Args:
+        processor: Callable stored in a processor slot, including closures,
+            bound callables and :func:`functools.partial` objects.
+
+    Returns:
+        ``module.qualname`` for ordinary functions, ``partial(wrapped)`` for
+        partials, or the object's class name when it exposes no
+        ``__qualname__``.
+    """
+    if isinstance(processor, functools.partial):
+        return f'partial({_processor_name(processor.func)})'
+    qualname = getattr(processor, '__qualname__', None)
+    if not isinstance(qualname, str):
+        return type(processor).__name__
+    module = getattr(processor, '__module__', '')
+    return f'{module}.{qualname}' if module else qualname
+
+
+def diff_mappings(
+    before: TagDict,
+    after: TagDict,
+) -> dict[str, tuple[Any, Any]]:
+    """Return the keys whose values differ between two field mappings.
+
+    A key counts as changed when one mapping lacks it or when
+    ``before[key] != after[key]``. Equal values, including keys a processor
+    only read or reassigned to the same object, are omitted, so unchanged
+    fields are never reported as a change source.
+
+    Args:
+        before: Mapping captured before the processor ran.
+        after: Mapping the processor returned or mutated in place.
+
+    Returns:
+        Changed key names mapped to ``(old, new)`` pairs. The missing side of
+        an added or removed key is the private marker used by
+        :class:`FieldChange`. The input mappings are neither copied nor
+        mutated.
+    """
+    changes: dict[str, tuple[Any, Any]] = {}
+    # Walk the original mapping in its insertion order first, then keys only
+    # the processor added. Iterating a set union here would make the audit
+    # record order depend on hash randomisation.
+    for key, old in before.items():
+        new = after.get(key, _MISSING)
+        if new is _MISSING or old != new:
+            changes[key] = (old, new)
+    for key, new in after.items():
+        if key not in before:
+            changes[key] = (_MISSING, new)
+    return changes
+
+
+def field_changes(
+    *,
+    tag: str,
+    phase: str,
+    processor: Processor,
+    before: TagDict,
+    after: TagDict,
+) -> list[FieldChange]:
+    """Build :class:`FieldChange` records for one processor call.
+
+    Args:
+        tag: Slug of the tag whose processor slot ran.
+        phase: ``pre`` or ``post`` pipeline stage.
+        processor: Callback to attribute the differences to.
+        before: Deep-copied mapping from before the callback.
+        after: Mapping the callback returned or mutated in place.
+
+    Returns:
+        One record per changed key, ordered by the original mapping's
+        insertion order followed by keys the processor added, or an empty
+        list when the processor left every field unchanged.
+    """
+    name = _processor_name(processor)
+    return [
+        FieldChange(
+            tag=tag,
+            field=field,
+            phase=phase,
+            processor=name,
+            before=old,
+            after=new,
+        )
+        for field, (old, new) in diff_mappings(before, after).items()
+    ]
 
 
 def add_currency_pre_processor(

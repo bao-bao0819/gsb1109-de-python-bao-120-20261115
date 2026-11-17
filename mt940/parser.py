@@ -222,7 +222,7 @@ def parse(
         transaction_boundary: Tag slugs that open transaction blocks in
             addition to statement tags. A bare string means one slug. Empty or
             omitted preserves the default grouping rules.
-        options: Immutable opt-in behaviour switches. All ten switches default
+        options: Immutable opt-in behaviour switches. Every switch defaults
             to ``False``. See :class:`mt940.options.Options`.
 
     Returns:

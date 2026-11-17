@@ -87,7 +87,8 @@
     ],
     "tests": [
       "mt940_tests/test_models.py",
-      "mt940_tests/test_parse.py"
+      "mt940_tests/test_parse.py",
+      "mt940_tests/test_process_sources.py"
     ],
     "symbols": [
       "mt940.models",
@@ -145,6 +146,9 @@
       "mt940.models.Transactions.__setstate__",
       "mt940.models.Transactions._process_match",
       "mt940.models.Transactions._process_statement_tag",
+      "mt940.models.Transactions._record_processor_changes",
+      "mt940.models.Transactions._run_post_processor",
+      "mt940.models.Transactions._run_pre_processor",
       "mt940.models.Transactions._update_transaction",
       "mt940.models.Transactions.currency",
       "mt940.models.Transactions.data",
@@ -153,6 +157,7 @@
       "mt940.models.Transactions.normalize_tag_id",
       "mt940.models.Transactions.options",
       "mt940.models.Transactions.parse",
+      "mt940.models.Transactions.process_sources",
       "mt940.models.Transactions.processors",
       "mt940.models.Transactions.sanitize_tag_id_matches",
       "mt940.models.Transactions.strip",
@@ -174,7 +179,8 @@
     ],
     "tests": [
       "mt940_tests/test_tags.py",
-      "mt940_tests/test_parse.py"
+      "mt940_tests/test_parse.py",
+      "mt940_tests/test_process_sources.py"
     ],
     "symbols": [
       "mt940.options",
@@ -187,6 +193,7 @@
       "mt940.options.Options.merge_keeps_values",
       "mt940.options.Options.names",
       "mt940.options.Options.non_swift_free_text",
+      "mt940.options.Options.process_sources",
       "mt940.options.Options.reversal_sign",
       "mt940.options.Options.strip_bom",
       "mt940.options.Options.timezone_offset",
@@ -225,27 +232,47 @@
       "internals.html"
     ],
     "tests": [
-      "mt940_tests/test_processors.py"
+      "mt940_tests/test_processors.py",
+      "mt940_tests/test_process_sources.py"
     ],
     "symbols": [
       "mt940.processors",
       "mt940.processors.DETAIL_KEYS",
       "mt940.processors.DETAIL_KEYS_APPLICANT_IBAN",
+      "mt940.processors.FieldChange",
+      "mt940.processors.FieldChange.added",
+      "mt940.processors.FieldChange.after",
+      "mt940.processors.FieldChange.before",
+      "mt940.processors.FieldChange.field",
+      "mt940.processors.FieldChange.phase",
+      "mt940.processors.FieldChange.processor",
+      "mt940.processors.FieldChange.removed",
+      "mt940.processors.FieldChange.tag",
       "mt940.processors.GVC_KEYS",
       "mt940.processors.Options",
       "mt940.processors.PostProcessor",
       "mt940.processors.PreProcessor",
+      "mt940.processors.Processor",
+      "mt940.processors.TagDict",
       "mt940.processors._GVC_KEY_LENGTH",
+      "mt940.processors._MISSING",
+      "mt940.processors._MissingMarker",
+      "mt940.processors._MissingMarker.__eq__",
+      "mt940.processors._MissingMarker.__hash__",
+      "mt940.processors._MissingMarker.__repr__",
       "mt940.processors._join_result",
       "mt940.processors._options_of",
       "mt940.processors._parse_mt940_details",
       "mt940.processors._parse_mt940_gvcodes",
       "mt940.processors._parse_segments",
       "mt940.processors._process_segments",
+      "mt940.processors._processor_name",
       "mt940.processors.add_currency_pre_processor",
       "mt940.processors.add_currency_pre_processor._add_currency_pre_processor",
       "mt940.processors.date_cleanup_post_processor",
       "mt940.processors.date_fixup_pre_processor",
+      "mt940.processors.diff_mappings",
+      "mt940.processors.field_changes",
       "mt940.processors.iph_id_re",
       "mt940.processors.mBank_set_iph_id",
       "mt940.processors.mBank_set_tnr",

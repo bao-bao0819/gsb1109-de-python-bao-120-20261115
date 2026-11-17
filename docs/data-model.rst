@@ -23,6 +23,10 @@ each with another ``data`` dictionary and a reference to its collection.
    * - ``Transactions``
      - ``options``, ``tags``, ``processors``, ``transaction_boundary``
      - Configuration used while parsing. See :doc:`customising`.
+   * - ``Transactions``
+     - ``process_sources``
+     - Optional ``FieldChange`` audit list, populated only with the
+       ``process_sources`` option. See :doc:`customising`.
    * - ``Transaction``
      - ``data``, ``transactions``
      - Parsed transaction fields and the owning collection.

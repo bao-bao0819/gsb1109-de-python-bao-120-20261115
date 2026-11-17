@@ -59,6 +59,11 @@ ignore = [
     'suspicious-pickle-usage',
     'suspicious-pickle-import',
 ]
+'mt940_tests/test_process_sources.py' = [
+    # The audit-list round-trip test pickles the collection itself.
+    'suspicious-pickle-usage',
+    'suspicious-pickle-import',
+]
 'mt940/processors.py' = [
     # mBank_* processor names are public API.
     'invalid-function-name',

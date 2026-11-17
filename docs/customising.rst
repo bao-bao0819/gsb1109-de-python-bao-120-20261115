@@ -130,3 +130,45 @@ replaces the default structured-details processor when fragments should be
 joined with spaces. The mBank callbacks in :mod:`mt940.processors` extract
 bank-specific codes and references when explicitly registered.
 The :mod:`mt940._types` reference defines the processor protocols.
+
+Trace processor changes
+-----------------------
+
+Enable ``Options(process_sources=True)`` to collect an audit trail on
+``Transactions.process_sources``. Every processor call is compared against a
+deep copy of its input, so a callback that mutates the mapping in place and one
+that returns a replacement object are traced the same way. Each
+:class:`mt940.processors.FieldChange` names the tag slug, the ``pre`` or
+``post`` phase, the processor and the field's before and after values. A key
+that is added or removed uses a missing marker, exposed through the
+``added`` and ``removed`` properties.
+
+.. doctest::
+
+   >>> from typing import Any
+   >>> import mt940
+   >>> def tag_currency(
+   ...     transactions: mt940.models.Transactions,
+   ...     tag: mt940.tags.Tag,
+   ...     tag_dict: dict[str, Any],
+   ... ) -> dict[str, Any]:
+   ...     del transactions, tag
+   ...     return {**tag_dict, 'currency': 'USD'}
+   >>> parsed = mt940.parse(
+   ...     ':61:240101C1,25NTRFNONREF',
+   ...     processors={'pre_statement': [tag_currency]},
+   ...     options=mt940.Options(process_sources=True),
+   ... )
+   >>> change = next(
+   ...     item for item in parsed.process_sources
+   ...     if item.field == 'currency'
+   ... )
+   >>> change.tag, change.phase, change.added, change.after
+   ('statement', 'pre', True, 'USD')
+   >>> change.processor.endswith('tag_currency')
+   True
+
+The switch is observability only. Parsing produces identical fields with it on
+or off, and a processor that leaves a field unchanged creates no record, so
+unchanged fields are never falsely attributed. The list survives a pickle
+round trip and grows across repeated ``parse`` calls on one collection.

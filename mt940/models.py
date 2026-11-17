@@ -9,6 +9,7 @@ in raw MT940 data and coerce them to native Python types.
 
 from __future__ import annotations
 
+import copy
 import datetime
 import decimal
 import re
@@ -31,6 +32,9 @@ from .options import Options
 
 if TYPE_CHECKING:
     from typing_extensions import Self
+
+    from ._types import Processor
+    from .processors import FieldChange
 
 #: Sentinel for attributes that are absent, as opposed to ``None``.
 _MISSING = object()
@@ -542,12 +546,18 @@ class Transactions(Sequence[Transaction]):
         data: Statement fields keyed by tag output names. Later statement
             values replace earlier ones, including balances and references.
         transactions: Mutable ordered list of :class:`Transaction` instances.
-        options: Immutable parser switches. Omitted options disable all ten.
+        options: Immutable parser switches. Omitted options disable all
+            switches.
         tags: Per-collection mapping from tag ID to parser instance. The
             mapping is copied, but tag instances are shared with its source.
         processors: Per-collection mapping of slot name to ordered callable
             lists. The mapping is copied shallowly, so default or supplied
             lists are shared. Assign a new list to customise one collection.
+        process_sources: Mutable audit list of
+            :class:`mt940.processors.FieldChange` records. It stays empty
+            unless ``Options.process_sources`` is enabled, and the records
+            never alter what parsing stores. Repeated :meth:`parse` calls
+            append to the same list.
         transaction_boundary: Frozen set of extra tag slugs that start a new
             transaction. A following statement tag can fill the placeholder.
         DEFAULT_PROCESSORS: Default slot mapping, copied shallowly on
@@ -630,7 +640,9 @@ class Transactions(Sequence[Transaction]):
 
         Missing ``transaction_boundary`` and ``options`` attributes get empty
         boundaries and disabled switches to support older pickles. Existing
-        saved values for those attributes are preserved. Returns ``None``.
+        saved values for those attributes are preserved. A missing
+        ``process_sources`` list is backfilled so restored collections can
+        keep recording. Returns ``None``.
         """
         self.__dict__.update(state)
         self.processors: Processors = self.DEFAULT_PROCESSORS.copy()
@@ -638,6 +650,7 @@ class Transactions(Sequence[Transaction]):
         # written by 5.0.0 predate options.
         _ = self.__dict__.setdefault('transaction_boundary', frozenset())
         _ = self.__dict__.setdefault('options', Options())
+        _ = self.__dict__.setdefault('process_sources', [])
 
     def __init__(
         self,
@@ -659,8 +672,8 @@ class Transactions(Sequence[Transaction]):
                 blocks. A string is treated as one slug. Other iterables are
                 consumed once into a ``frozenset``. Omitted or empty selects no
                 extra boundaries.
-            options: Parser switches. Omitted or ``None`` disables all ten
-                fields.
+            options: Parser switches. Omitted or ``None`` disables every
+                field.
 
         No tags or processors run until :meth:`parse` is called.
         """
@@ -685,6 +698,7 @@ class Transactions(Sequence[Transaction]):
 
         self.transactions: list[Transaction] = []
         self.data: dict[str, Any] = {}
+        self.process_sources: list[FieldChange] = []
 
     @property
     def currency(self) -> str | None:
@@ -838,12 +852,12 @@ class Transactions(Sequence[Transaction]):
         tag_dict: dict[str, Any] = tag.parse(self, tag_data)
 
         for processor in self.processors.get(f'pre_{tag.slug}', []):
-            tag_dict = processor(self, tag, tag_dict)
+            tag_dict = self._run_pre_processor(tag, processor, tag_dict)
 
         result: Any = tag(self, tag_dict)
 
         for processor in self.processors.get(f'post_{tag.slug}', []):
-            result = processor(self, tag, tag_dict, result)
+            result = self._run_post_processor(tag, processor, tag_dict, result)
 
         if isinstance(tag, mt940.tags.Statement):
             # Statement (:61:) handling always takes precedence so it cannot
@@ -862,6 +876,104 @@ class Transactions(Sequence[Transaction]):
             self.data.update(result)
         # Transaction-scoped data before the first transaction has nowhere to
         # go and is dropped (the empty_86 fixture depends on this).
+
+    def _record_processor_changes(
+        self,
+        tag: mt940.tags.Tag,
+        phase: str,
+        processor: Processor,
+        before: dict[str, Any],
+        after: object,
+    ) -> None:
+        """Append field-change records for one processor when opted in.
+
+        Args:
+            tag: Tag whose processor slot ran; its slug labels each record.
+            phase: ``pre`` or ``post`` pipeline stage.
+            processor: Callback the differences are attributed to.
+            before: Deep-copied mapping from before the callback.
+            after: Mapping the callback returned, or its non-mapping result.
+
+        The returned mapping is usually the live capture dictionary, which a
+        later processor may mutate in place, so the after side is deep-copied
+        before a record is built. Every record therefore keeps the values as
+        they were immediately after this processor, and earlier records are not
+        rewritten by later mutations. A non-mapping result cannot carry field
+        changes and is ignored while still flowing through the pipeline.
+        Returns ``None``.
+        """
+        if not isinstance(after, dict):
+            return
+        self.process_sources.extend(
+            processors.field_changes(
+                tag=tag.slug,
+                phase=phase,
+                processor=processor,
+                before=before,
+                after=copy.deepcopy(after),
+            )
+        )
+
+    def _run_pre_processor(
+        self,
+        tag: mt940.tags.Tag,
+        processor: Processor,
+        tag_dict: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run one pre-processor, snapshotting fields for the audit trail.
+
+        Args:
+            tag: Tag whose slot ran.
+            processor: Pre-processor callable.
+            tag_dict: Mapping handed to the processor.
+
+        Returns:
+            The mapping the processor returned. When source recording is on,
+            the input is deep-copied first so both in-place mutation and a
+            replacement object can be diffed afterwards.
+        """
+        snapshot = (
+            copy.deepcopy(tag_dict) if self.options.process_sources else None
+        )
+        processed = processor(self, tag, tag_dict)
+        if snapshot is not None:
+            self._record_processor_changes(
+                tag, 'pre', processor, snapshot, processed
+            )
+        return processed
+
+    def _run_post_processor(
+        self,
+        tag: mt940.tags.Tag,
+        processor: Processor,
+        tag_dict: dict[str, Any],
+        result: object,
+    ) -> object:
+        """Run one post-processor, snapshotting fields for the audit trail.
+
+        Args:
+            tag: Tag whose slot ran.
+            processor: Post-processor callable.
+            tag_dict: Final pre-processed capture mapping, passed through
+                unchanged.
+            result: Mapping handed to the processor, or a preceding
+                post-processor's non-mapping result.
+
+        Returns:
+            Whatever the processor returned. A non-mapping result is not
+            deep-copied because the audit trail can only diff mappings.
+        """
+        snapshot = (
+            copy.deepcopy(result)
+            if self.options.process_sources and isinstance(result, dict)
+            else None
+        )
+        processed = processor(self, tag, tag_dict, result)
+        if snapshot is not None:
+            self._record_processor_changes(
+                tag, 'post', processor, snapshot, processed
+            )
+        return processed
 
     def _process_statement_tag(self, result: dict[str, Any]) -> None:
         """Merge statement fields into the trailing placeholder or append one.

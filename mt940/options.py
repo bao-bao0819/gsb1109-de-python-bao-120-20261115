@@ -1,6 +1,6 @@
 """Immutable switches for parser behaviour changes.
 
-All ten :class:`Options` fields default to ``False``. The switches preserve
+All :class:`Options` fields default to ``False``. The switches preserve
 legacy output for affected fields unless explicitly enabled. Pass an instance
 to :func:`mt940.parse`, :func:`mt940.parse_statements` or
 :class:`mt940.models.Transactions`. :meth:`Options.all` enables every currently
@@ -22,7 +22,7 @@ import dataclasses
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Options:
-    """Frozen, slotted configuration for ten opt-in parser behaviours.
+    """Frozen, slotted configuration for opt-in parser behaviours.
 
     Each constructor keyword is a boolean field described below. Omitted fields
     remain ``False``. Instances can be shared between collections because
@@ -32,6 +32,9 @@ class Options:
     No field changes tag registration or processor ordering. Options are read
     from the collection while its tags and processors run. ``strip_bom`` is
     applied by the high-level source readers, not by ``Transactions.parse``.
+    ``process_sources`` only populates the separate
+    ``Transactions.process_sources`` audit list and never changes parsed
+    fields.
     """
 
     #: File the ``?31`` sub-field of a structured ``:86:`` under
@@ -82,6 +85,13 @@ class Options:
     #: dropped.
     gvc_leading_text: bool = False
 
+    #: Record processor-driven field changes in
+    #: ``Transactions.process_sources``. Each entry names the tag, pipeline
+    #: phase, processor and the before/after values of the one field that
+    #: changed. The parsed results are unchanged; fields a processor leaves
+    #: untouched are never reported.
+    process_sources: bool = False
+
     @classmethod
     def all(cls) -> Options:
         """Construct an instance with every declared field set to ``True``.
@@ -91,8 +101,8 @@ class Options:
         subclass constructor accepts all those keywords.
 
         Returns:
-            An instance of the called class. For ``Options`` this enables all
-            ten switches.
+            An instance of the called class with every switch enabled,
+            including the process-source audit trail.
 
         Raises:
             TypeError: The constructor rejects a field keyword, for example

@@ -2,7 +2,7 @@ Choose compatibility options
 ============================
 
 Some parsing corrections change the output of previously accepted input.
-:class:`mt940.Options` keeps all ten switches ``False`` by default. Choose
+:class:`mt940.Options` keeps every switch ``False`` by default. Choose
 individual switches after comparing your source files, or use
 :meth:`mt940.options.Options.all` to enable every declared field.
 
@@ -24,8 +24,8 @@ makes it negative. ``Options.all()`` includes that switch, so the amount agrees
 in this example. Agreement for one input does not establish that the other
 switches have no effect on your bank's exports.
 
-All ten switches
-----------------
+All switches
+------------
 
 .. list-table:: Defaults and enabled effects
    :header-rows: 1
@@ -79,6 +79,13 @@ All ten switches
        terminator and discard early text.
      - Disables that early terminator interpretation. Free text before a
        genuine GVC keyword is still discarded.
+   * - ``process_sources``
+     - ``Transactions.process_sources`` stays empty and parsed fields are the
+       only output.
+     - Records every field a processor changes, with the tag, phase,
+       processor and before/after values, in
+       ``Transactions.process_sources``. Parsed results are unchanged and
+       fields a processor leaves untouched are not reported.
 
 Configuration is immutable
 --------------------------
@@ -95,7 +102,7 @@ and use ``dataclasses.replace`` when a copy needs one changed field:
    >>> selected.case_insensitive_marks, extended.case_insensitive_marks
    (False, True)
    >>> len(mt940.Options.names())
-   10
+   11
    >>> all(getattr(mt940.Options.all(), name) for name in mt940.Options.names())
    True
 
