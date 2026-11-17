@@ -21,6 +21,7 @@ setup(
     + version
     + ".tar.gz",
     keywords=["iCal"],
+    entry_points={"console_scripts": ["ical-capacity=icalevents.capacity:main"]},
     classifiers=[
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",

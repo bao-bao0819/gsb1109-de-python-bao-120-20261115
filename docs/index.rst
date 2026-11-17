@@ -30,6 +30,34 @@ Google:
 
   es  = events(<Google Calendar URL>)
 
+Resource capacity:
+------------------
+
+Bookings may declare ``X-RESOURCE-QUANTITY``; supply events may declare
+``X-RESOURCE-CAPACITY`` or ``X-RESOURCE-CAPACITY-DELTA``.  The capacity
+module reports the exact half-open intervals where demand exceeds supply and
+the bookings that overlap them.
+
+.. code:: python
+
+  from datetime import datetime
+  from icalevents.capacity import analyze_calendar
+
+  report = analyze_calendar(
+      file="rack-room.ics",
+      start=datetime(2026, 3, 1),
+      end=datetime(2026, 3, 20),
+  )
+  for segment in report.overloads:
+      print(segment.start, segment.end, segment.overload)
+
+Segments with missing declarations are returned as ``unknown`` rather than
+being counted as zero.  From the command line:
+
+.. code:: bash
+
+  ical-capacity rack-room.ics --start 2026-03-01 --end 2026-03-20 --json
+
 
 Example
 =======
@@ -115,6 +143,14 @@ icalevents.icalparser module
 ----------------------------
 
 .. automodule:: icalevents.icalparser
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+icalevents.capacity module
+--------------------------
+
+.. automodule:: icalevents.capacity
    :members:
    :undoc-members:
    :show-inheritance:

@@ -21,6 +21,9 @@ dependencies = [
 [tool.poetry]
 requires-poetry = ">=2.0"
 
+[tool.poetry.scripts]
+ical-capacity = "icalevents.capacity:main"
+
 [tool.poetry.group.dev.dependencies]
 coverage = "^7.6.10"
 pytest = "^8.3.4"
