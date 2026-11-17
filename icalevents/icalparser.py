@@ -4,6 +4,7 @@ Parse iCal data to Events.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, tzinfo as _tzinfo
 from importlib.metadata import version
 from random import randint
@@ -15,6 +16,14 @@ from dateutil.tz import UTC, gettz
 from icalendar import Calendar, Timezone
 from icalendar.prop import vDDDLists, vText
 from pytz import timezone
+
+from .coverage import (
+    CoverageResult,
+    RecurrenceFailure,
+    complete_coverage,
+    failed_coverage,
+    partial_coverage,
+)
 
 if version("icalendar") >= "6.0":
     from icalendar import Component, use_pytz
@@ -33,6 +42,16 @@ def now() -> datetime:
     :return: now as datetime with timezone
     """
     return datetime.now(UTC)
+
+
+@dataclass(frozen=True)
+class ParseResult:
+    """
+    Events found in a query window together with its coverage status.
+    """
+
+    events: list[Event]
+    coverage: CoverageResult
 
 
 class Attendee(str):
@@ -287,7 +306,8 @@ def parse_events(
     tzinfo: _tzinfo | None = None,
     sort: bool = False,
     strict: bool = False,
-) -> list[Event]:
+    coverage: bool = False,
+) -> list[Event] | ParseResult:
     """
     Query the events occurring in a given time range.
 
@@ -295,7 +315,10 @@ def parse_events(
     :param start: start date for search, default today (in UTC format)
     :param end: end date for search (in UTC format)
     :param default_span: default query length (one week)
-    :return: events as list
+    :param coverage: return a ParseResult with coverage status instead of
+        only the events; unparseable recurrence rules degrade the status to
+        partial instead of raising and list the affected ranges
+    :return: events as list, or ParseResult when coverage is True
     """
     if not start:
         start = now()
@@ -304,9 +327,19 @@ def parse_events(
         end = start + default_span
 
     if not content:
+        if coverage:
+            return ParseResult(
+                [], failed_coverage(start, end, "Content is invalid!")
+            )
         raise ValueError("Content is invalid!")
 
-    calendar = Calendar.from_ical(content)
+    try:
+        calendar = Calendar.from_ical(content)
+    except Exception as exc:
+        if coverage:
+            reason = str(exc) or type(exc).__name__
+            return ParseResult([], failed_coverage(start, end, reason))
+        raise
 
     # > Will be deprecated ========================
     # Calendar.from_ical already parses timezones as specified in the ical.
@@ -343,6 +376,7 @@ def parse_events(
     # < ==========================================
 
     found: list[Event] = []
+    failures: list[RecurrenceFailure] = []
 
     def is_not_exception(date: datetime) -> bool:
         exdate = "%04d%02d%02d" % (
@@ -369,79 +403,42 @@ def parse_events(
                 exceptions[exdate[0:8]] = exdate
 
         if component.name == "VEVENT":
-            e = create_event(component, strict)
+            try:
+                e = create_event(component, strict)
+                f, t = _component_window(e.start, e.recurring, start, end)
 
-            # make rule.between happy and provide from, to points in time that have the same format as dtstart
-            if type(e.start) is date and not e.recurring:
-                f, t = date(start.year, start.month, start.day), date(
-                    end.year, end.month, end.day
-                )
-            elif type(e.start) is datetime and e.start.tzinfo:
-                f = (
-                    datetime(
-                        start.year,
-                        start.month,
-                        start.day,
-                        start.hour,
-                        start.minute,
-                        tzinfo=e.start.tzinfo,
-                    )
-                    if type(start) == datetime
-                    else datetime(
-                        start.year, start.month, start.day, tzinfo=e.start.tzinfo
-                    )
-                )
-                t = (
-                    datetime(
-                        end.year,
-                        end.month,
-                        end.day,
-                        end.hour,
-                        end.minute,
-                        tzinfo=e.start.tzinfo,
-                    )
-                    if type(end) == datetime
-                    else datetime(end.year, end.month, end.day, tzinfo=e.start.tzinfo)
-                )
-            else:
-                f = (
-                    datetime(
-                        start.year, start.month, start.day, start.hour, start.minute
-                    )
-                    if type(start) == datetime
-                    else datetime(start.year, start.month, start.day)
-                )
-                t = (
-                    datetime(end.year, end.month, end.day, end.hour, end.minute)
-                    if type(end) == datetime
-                    else datetime(end.year, end.month, end.day)
-                )
+                if e.recurring:
+                    rule = parse_rrule(component)
+                    # We can not use rule.between because the event has to fit in between https://github.com/jazzband/icalevents/issues/101
+                    for dt in [
+                        dt
+                        for dt in list(
+                            rule.between(f - (end - start), t + (end - start))
+                        )
+                        if dt >= f and dt <= t
+                    ]:
+                        # Recompute the start time in the current timezone *on* the
+                        # date of *this* occurrence. This handles the case where the
+                        # recurrence has crossed over the daylight savings time boundary.
+                        if is_not_exception(dt):
+                            if type(dt) is datetime and dt.tzinfo:
+                                ecopy = e.copy_to(
+                                    dt.replace(tzinfo=get_timezone(str(dt.tzinfo))),
+                                    e.uid,
+                                )
+                            else:
+                                ecopy = e.copy_to(
+                                    dt.date() if type(e.start) is date else dt,
+                                    e.uid,
+                                )
+                            found.append(ecopy)
 
-            if e.recurring:
-                rule = parse_rrule(component)
-                # We can not use rule.between because the event has to fit in between https://github.com/jazzband/icalevents/issues/101
-                for dt in [
-                    dt
-                    for dt in list(rule.between(f - (end - start), t + (end - start)))
-                    if dt >= f and dt <= t
-                ]:
-                    # Recompute the start time in the current timezone *on* the
-                    # date of *this* occurrence. This handles the case where the
-                    # recurrence has crossed over the daylight savings time boundary.
-                    if is_not_exception(dt):
-                        if type(dt) is datetime and dt.tzinfo:
-                            ecopy = e.copy_to(
-                                dt.replace(tzinfo=get_timezone(str(dt.tzinfo))),
-                                e.uid,
-                            )
-                        else:
-                            ecopy = e.copy_to(
-                                dt.date() if type(e.start) is date else dt, e.uid
-                            )
-                        found.append(ecopy)
-
-            elif e.end >= f and e.start <= t and is_not_exception(e.start):
-                found.append(e)
+                elif e.end >= f and e.start <= t and is_not_exception(e.start):
+                    found.append(e)
+            except Exception as exc:
+                if not coverage:
+                    raise
+                _record_component_failure(exc, component, start, end, failures)
 
     result = found.copy()
 
@@ -522,7 +519,136 @@ def parse_events(
     if tzinfo:
         result = [event.astimezone(tzinfo) for event in result]
 
+    if coverage:
+        if failures:
+            coverage_result = partial_coverage(start, end, failures)
+        else:
+            coverage_result = complete_coverage(start, end)
+        return ParseResult(result, coverage_result)
+
     return result
+
+
+def _component_window(
+    event_start: date | datetime,
+    recurring: bool,
+    start: datetime,
+    end: datetime,
+) -> tuple[date | datetime, date | datetime]:
+    """
+    Build from/to points matching the format of the component's dtstart so
+    rule.between and the event comparisons work with every date/datetime mix.
+    """
+    # make rule.between happy and provide from, to points in time that have the same format as dtstart
+    if type(event_start) is date and not recurring:
+        f, t = date(start.year, start.month, start.day), date(
+            end.year, end.month, end.day
+        )
+    elif type(event_start) is datetime and event_start.tzinfo:
+        f = (
+            datetime(
+                start.year,
+                start.month,
+                start.day,
+                start.hour,
+                start.minute,
+                tzinfo=event_start.tzinfo,
+            )
+            if type(start) == datetime
+            else datetime(
+                start.year, start.month, start.day, tzinfo=event_start.tzinfo
+            )
+        )
+        t = (
+            datetime(
+                end.year,
+                end.month,
+                end.day,
+                end.hour,
+                end.minute,
+                tzinfo=event_start.tzinfo,
+            )
+            if type(end) == datetime
+            else datetime(end.year, end.month, end.day, tzinfo=event_start.tzinfo)
+        )
+    else:
+        f = (
+            datetime(
+                start.year, start.month, start.day, start.hour, start.minute
+            )
+            if type(start) == datetime
+            else datetime(start.year, start.month, start.day)
+        )
+        t = (
+            datetime(end.year, end.month, end.day, end.hour, end.minute)
+            if type(end) == datetime
+            else datetime(end.year, end.month, end.day)
+        )
+
+    return f, t
+
+
+def _record_component_failure(
+    exc: Exception,
+    component: Component,
+    start: datetime,
+    end: datetime,
+    failures: list[RecurrenceFailure],
+) -> None:
+    """
+    Record the range of the query window affected by a broken component.
+
+    A broken recurrence rule only casts doubt on the part of the window from
+    the event's DTSTART onwards - the whole window must never be registered
+    as free because of one unparseable rule.
+    """
+    reason = str(exc) or type(exc).__name__
+    uid = encode(component.get("uid"))
+    summary = encode(component.get("summary"))
+    failure_start: date | datetime = start
+    failure_end: date | datetime = end
+
+    try:
+        dtstart_prop = component.get("dtstart")
+        if dtstart_prop is not None:
+            event_start = dtstart_prop.dt
+            recurring = component.get("rrule") is not None
+
+            if type(event_start) is datetime:
+                f, t = _component_window(event_start, recurring, start, end)
+                failure_start = max(event_start, f)
+                if recurring:
+                    failure_end = t
+                else:
+                    failure_end = min(component.get("dtend").dt, t)
+            else:
+                # all-day events use plain dates and must not be mixed with
+                # the naive datetimes _component_window builds for recurrence
+                window_start = date(start.year, start.month, start.day)
+                window_end = date(end.year, end.month, end.day)
+                failure_start = max(event_start, window_start)
+                if recurring:
+                    failure_end = window_end
+                elif component.get("dtend"):
+                    dtend = component.get("dtend").dt
+                    if type(dtend) is datetime:
+                        dtend = dtend.date()
+                    failure_end = min(dtend, window_end)
+                else:
+                    failure_end = min(event_start, window_end)
+    except Exception:
+        failure_start, failure_end = start, end
+
+    if failure_start < failure_end:
+        failures.append(
+            RecurrenceFailure(
+                uid=uid,
+                summary=summary,
+                start=failure_start,
+                end=failure_end,
+                reason=reason,
+            )
+        )
 
 
 def parse_rrule(component: Component):
