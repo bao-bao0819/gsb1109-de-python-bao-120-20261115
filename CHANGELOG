@@ -3,6 +3,10 @@
 
  - Fix :py:mod:`ms1` and :py:mod:`ms2` to ensure array alignment (`#228 <https://github.com/levitsky/pyteomics/pull/228>`_ by KBS).
  - Speed up :py:func:`parser.coverage_mask` (`#229 <https://github.com/levitsky/pyteomics/pull/229>`_ by Bharat Kaurav).
+ - Add :py:func:`pyteomics.mzml.spectrum_manifest`, :py:func:`pyteomics.mzml.merge_spectrum_manifests`
+   and JSON helpers for inventories of segmented mzML uploads. The manifest verifies decoded
+   binary array lengths and checksums, and reports missing arrays, missing scans and duplicate
+   spectrum IDs separately without promoting partial spectra to complete scans.
 
 
 5.0.2

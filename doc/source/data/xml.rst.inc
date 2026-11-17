@@ -67,6 +67,74 @@ but it uses byte offset information found at the end of the file.
 Unlike the rest of the functions and classes, :py:class:`pyteomics.mzml.PreIndexedMzML`
 does not have a counterpart in :py:mod:`pyteomics.mzxml`.
 
+Spectrum manifests for segmented uploads
+........................................
+
+When an mzML file arrives in chunks, the declared ``<spectrumList count>`` may
+be larger than the number of spectra received, and the last chunk may end
+inside a spectrum. :py:func:`pyteomics.mzml.spectrum_manifest` produces a
+JSON-serializable inventory that verifies the binary arrays rather than
+trusting the header:
+
+.. code-block:: python
+
+    >>> from pyteomics import mzml
+    >>> manifest = mzml.spectrum_manifest('tests/test.mzML')
+    >>> manifest['summary']
+    {'declared': 2, 'received': 2, 'complete': 2, 'missing_spectra': 0,
+     'missing_scans': 0, 'missing_arrays': 0, 'duplicate_ids': 0}
+    >>> manifest['missing_arrays']
+    []
+    >>> manifest['missing_scans']
+    []
+    >>> manifest['duplicate_ids']
+    []
+
+The three defect classes are reported separately:
+
+``missing_arrays``
+    Required arrays that are absent, empty or whose decoded length disagrees
+    with ``defaultArrayLength``. Each entry carries the affected array names
+    and per-array issues.
+
+``missing_scans``
+    Zero-based ``spectrumList`` indices implied by the declared count but not
+    received. ``missing_scan_numbers`` translates them to the scan numbering
+    used in the spectrum IDs when that numbering is consistent.
+
+``duplicate_ids``
+    Repeated spectrum IDs, with each occurrence's index, completeness and
+    payload fingerprint. Identical repeats have ``conflict`` set to false;
+    differing complete payloads have ``conflict`` set to true.
+
+A spectrum is counted as complete only if its arrays were decoded and their
+lengths match ``defaultArrayLength``. ``complete`` on the manifest itself also
+requires the declared count to be known and all declared spectra to be
+complete.
+
+Segments can begin or end in the middle of a spectrum; pass
+``declared_count`` when a later segment does not repeat the
+``spectrumList/@count`` header. Binary arrays are not duplicated in the
+manifest: each record stores lengths and a SHA-1 digest, so the manifest stays
+small while still being verifiable.
+
+Segments can be merged without recounting overlapping spectra:
+
+.. code-block:: python
+
+    >>> base = mzml.spectrum_manifest('segment-1.mzML')
+    >>> update = mzml.spectrum_manifest('segment-2.mzML')
+    >>> merged = mzml.merge_spectrum_manifests(base, update)
+    >>> merged['merge']['added_count']
+    1
+
+``merge_spectrum_manifests`` adds only IDs absent from the base. Existing
+partial records are upgraded only when the update actually supplies verifiable
+arrays; a stale ``complete`` flag is ignored and completeness is recomputed
+from array evidence. Use :py:func:`pyteomics.mzml.dump_spectrum_manifest` or
+:py:func:`pyteomics.mzml.write_spectrum_manifest` to persist a manifest as
+JSON.
+
 
 mzMLb
 -----
