@@ -116,6 +116,33 @@ It's also possible to stream data chunks for a single channel using :py:meth:`np
         for chunk in channel.data_chunks():
             channel_chunk_data = chunk[:]
 
+Reading small ranges of string channels
+---------------------------------------
+
+String data is stored in each chunk as an offset table followed by the string bytes.
+To read a small range of a string channel without expanding whole chunks or the whole file,
+use :py:meth:`nptdms.TdmsChannel.read_string_samples`.
+Only the offset table entries and string bytes needed for the requested samples are read::
+
+    with TdmsFile.open(tdms_file_path) as tdms_file:
+        channel = tdms_file[group_name][channel_name]
+        result = channel.read_string_samples(offset=100, length=10)
+        samples = result.samples
+        for (byte_offset, byte_length), sample in zip(result.source_ranges, result.samples):
+            print(sample, "at", byte_offset, "for", byte_length, "bytes")
+
+``source_ranges`` gives the byte range in the TDMS data file that each sample was decoded from,
+before text decoding. An empty string has a zero length range at the position where its
+empty payload is stored. Ranges therefore span chunks and segments correctly and
+multi-byte characters are decoded from their actual bytes.
+
+If a chunk contains an invalid or decreasing offset, reading stops at the affected chunk.
+Any samples read before it are returned, ``result.error`` is an instance of
+:py:class:`nptdms.types.StringOffsetError` describing the bad offset, and bytes from the next
+chunk are never joined to a string from the affected chunk. If the channel was already read
+into memory with :py:meth:`~nptdms.TdmsFile.read`, samples are still available but
+``source_ranges`` is None because the original byte positions are no longer tracked.
+
 If you don't need to read the channel data at all and only need to read metadata, you can
 also use the static :py:meth:`~nptdms.TdmsFile.read_metadata` method::
 

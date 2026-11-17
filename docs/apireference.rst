@@ -27,6 +27,12 @@ Reading TDMS Files
 .. autoclass:: ChannelDataChunk()
   :members:
 
+.. autoclass:: StringReadResult()
+  :members:
+
+.. autoclass:: nptdms.types.StringOffsetError()
+  :members:
+
 .. autoclass:: nptdms.tdms.FileStatus()
   :members:
 

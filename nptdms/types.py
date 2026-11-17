@@ -195,6 +195,26 @@ class ExtendedFloatWithUnit(TdmsType):
     pass
 
 
+class StringOffsetError(ValueError):
+    """Invalid offsets in the offset table of a chunk of string data
+
+    :ivar sample_index: Index of the offending string within the chunk,
+        or None if the offset table itself could not be read.
+    :ivar offset: The offending offset value, if one could be read.
+    :ivar limit: The largest offset that would have been valid.
+    :ivar samples: Valid samples read before the bad offset, if any.
+    :ivar source_ranges: Source ranges for ``samples``, if any.
+    """
+
+    def __init__(self, message, sample_index=None, offset=None, limit=None):
+        super().__init__(message)
+        self.sample_index = sample_index
+        self.offset = offset
+        self.limit = limit
+        self.samples = []
+        self.source_ranges = []
+
+
 @tds_data_type(0x20, None)
 class String(TdmsType):
     def __init__(self, value):
@@ -218,23 +238,184 @@ class String(TdmsType):
         return String._decode(file.read(size))
 
     @classmethod
-    def read_values(cls, file, number_values, endianness="<"):
+    def read_values(cls, file, number_values, endianness="<", data_size=None):
         """ Read string raw data
 
             This is stored as an array of offsets
             followed by the contiguous string data.
+
+            :param data_size: Optional total size of this chunk of string data in bytes.
+                When given, offsets are validated against this size and reads are
+                bounded by it, so a corrupt offset cannot read into a later chunk.
         """
-        offsets = [0]
-        for i in range(number_values):
-            offsets.append(Uint32.read(file, endianness))
+        if number_values == 0:
+            return []
+
+        payload_start, offsets = cls._read_offsets(
+            file, number_values, endianness, data_size)
+        payload_size = None if data_size is None else data_size - 4 * number_values
         strings = []
-        for i in range(number_values):
-            s = file.read(offsets[i + 1] - offsets[i])
+        previous = 0
+        for i, offset in enumerate(offsets):
+            length = offset - previous
+            if payload_size is not None:
+                length = min(length, max(0, payload_size - previous))
+            s = file.read(length)
+            if len(s) != length:
+                raise StringOffsetError(
+                    "String data for sample %d is truncated: expected %d bytes but got %d" % (
+                        i, length, len(s)),
+                    sample_index=i, offset=offset, limit=payload_size)
             strings.append(String._decode(s))
+            previous = offset
+        if payload_size is not None:
+            # Leave the file at the declared end of this chunk's data, even when
+            # the last offset does not account for all of it, so a following
+            # object in the same chunk is read from the correct position.
+            file.seek(payload_start + payload_size)
         return strings
 
+    @classmethod
+    def read_samples(
+            cls, file, number_values, offset=0, length=None, endianness="<",
+            data_size=None, encoding=None):
+        """Read a range of string values from one chunk of string data
+
+        Only the offset table and the bytes for the requested samples are read.
+        The returned source ranges are absolute byte ranges in ``file`` and have a
+        one to one correspondence with the returned samples.  An empty string has
+        a zero length range at the position of its (empty) payload.
+
+        Strings are decoded from their actual bytes, so multi-byte characters are
+        handled without assuming one byte per character.
+
+        :param data_size: Optional total size of this chunk of string data in bytes,
+            used to bound reads so that corrupt offsets cannot read into another chunk.
+        :param encoding: Optional text encoding to use, defaulting to UTF-8.
+        :raises StringOffsetError: If the offset table is invalid or truncated.
+        """
+        if number_values == 0 or length == 0:
+            return [], []
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        if length is not None and length < 0:
+            raise ValueError("length must be non-negative")
+
+        start = min(offset, number_values)
+        stop = number_values if length is None else min(number_values, start + length)
+        if start >= stop:
+            return [], []
+
+        chunk_start = file.tell()
+        try:
+            offsets, payload_start, first_byte = cls._read_offsets_range(
+                file, number_values, start, stop, endianness, data_size)
+        except StringOffsetError as exc:
+            bad_index = exc.sample_index
+            if bad_index is not None and bad_index > start:
+                # Return the valid part of the chunk before the bad offset
+                try:
+                    file.seek(chunk_start)
+                    samples, source_ranges = cls.read_samples(
+                        file, number_values, start, bad_index - start,
+                        endianness, data_size, encoding)
+                    exc.samples = samples
+                    exc.source_ranges = source_ranges
+                except StringOffsetError:
+                    pass
+            raise
+
+        last_byte = offsets[-1]
+        byte_count = last_byte - first_byte
+
+        file.seek(payload_start + first_byte)
+        payload = file.read(byte_count)
+        if len(payload) != byte_count:
+            payload_size = None if data_size is None else data_size - 4 * number_values
+            raise StringOffsetError(
+                "String data is truncated: expected %d bytes but got %d" % (
+                    byte_count, len(payload)),
+                limit=payload_size)
+
+        samples = []
+        source_ranges = []
+        previous = first_byte
+        for i, end in zip(range(start, stop), offsets):
+            sample_bytes = payload[previous - first_byte:end - first_byte]
+            samples.append(cls._decode(sample_bytes, encoding))
+            source_ranges.append((payload_start + previous, end - previous))
+            previous = end
+        return samples, source_ranges
+
+    @classmethod
+    def _read_offsets(cls, file, number_values, endianness="<", data_size=None):
+        """Read and validate the offset table for a chunk of string data
+
+        :returns: Tuple of the absolute payload start position and list of end offsets.
+        """
+        offsets, payload_start, _ = cls._read_offsets_range(
+            file, number_values, 0, number_values, endianness, data_size)
+        return payload_start, offsets
+
+    @classmethod
+    def _read_offsets_range(
+            cls, file, number_values, start, stop, endianness="<", data_size=None):
+        """Read and validate the offsets needed to read samples from start to stop
+
+        Only the offset table entries needed to locate and bound the requested
+        samples are read, so reading a small range does not read the whole chunk.
+
+        :returns: Tuple of end offsets for the requested samples, the absolute
+            payload start position, and the start byte of the first requested sample.
+        """
+        table_size = 4 * number_values
+        payload_size = None if data_size is None else data_size - table_size
+        if data_size is not None and table_size > data_size:
+            raise StringOffsetError(
+                "String offset table of %d bytes does not fit in a chunk of %d bytes" % (
+                    table_size, data_size),
+                limit=data_size)
+
+        table_start = file.tell()
+        # Read the offset immediately before the first requested sample, plus one
+        # extra offset when available, so a decreasing offset can be detected.
+        first_index = max(0, start - 2) if start > 1 else max(0, start - 1)
+        num_offsets = stop - first_index
+        file.seek(table_start + 4 * first_index)
+        raw_offsets = file.read(4 * num_offsets)
+        if len(raw_offsets) != 4 * num_offsets:
+            raise StringOffsetError(
+                "String offset table is truncated: expected %d bytes but got %d" % (
+                    4 * num_offsets, len(raw_offsets)))
+        values = list(_struct_unpack(endianness + 'L' * num_offsets, raw_offsets))
+
+        for j, offset in enumerate(values):
+            if payload_size is not None and offset > payload_size:
+                raise StringOffsetError(
+                    "String offset %d for sample %d is outside the chunk payload of %d bytes" % (
+                        offset, first_index + j, payload_size),
+                    sample_index=first_index + j, offset=offset, limit=payload_size)
+            if j > 0 and offset < values[j - 1]:
+                raise StringOffsetError(
+                    "String offset %d for sample %d is less than the previous offset %d" % (
+                        offset, first_index + j, values[j - 1]),
+                    sample_index=first_index + j, offset=offset, limit=payload_size)
+
+        first_byte = 0 if start == 0 else values[start - 1 - first_index]
+        offsets = values[start - first_index:]
+        if offsets and first_byte > offsets[-1]:
+            raise StringOffsetError(
+                "String offset for sample %d is after the end offset %d" % (
+                    start - 1, offsets[-1]),
+                sample_index=start - 1, offset=first_byte, limit=payload_size)
+
+        payload_start = table_start + table_size
+        return offsets, payload_start, first_byte
+
     @staticmethod
-    def _decode(string_bytes):
+    def _decode(string_bytes, encoding=None):
+        if encoding is not None:
+            return string_bytes.decode(encoding, errors='replace')
         try:
             return string_bytes.decode('utf-8')
         except UnicodeDecodeError as exc:

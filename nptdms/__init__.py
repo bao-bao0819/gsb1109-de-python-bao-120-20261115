@@ -10,3 +10,5 @@ from .version import __version_info__, __version__
 from .tdms import TdmsFile, TdmsGroup, TdmsChannel, DataChunk, GroupDataChunk, ChannelDataChunk
 from .writer import TdmsWriter, RootObject, GroupObject, ChannelObject
 from .byte_ranges import merge_byte_ranges, extract_segments
+from .string_data import StringReadResult
+from .types import StringOffsetError

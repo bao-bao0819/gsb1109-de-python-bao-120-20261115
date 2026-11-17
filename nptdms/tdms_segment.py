@@ -320,6 +320,55 @@ class TdmsSegment(object):
         ):
             yield chunk
 
+    def read_string_samples_for_channel(
+            self, f, channel_path, sample_offset=0, length=None, chunk_offset=0, num_chunks=None,
+            encoding=None):
+        """Read a range of string samples for one channel from this segment
+
+        Returns a generator of ``(chunk_index, samples, source_ranges)`` tuples,
+        where source ranges are absolute byte ranges in the file.
+
+        :raises nptdms.types.StringOffsetError: If a chunk has an invalid offset table.
+            The exception carries the chunk index in its ``chunk_index`` attribute.
+        """
+        if not self.toc_mask & toc_properties['kTocRawData']:
+            return
+        segment_obj = self.get_segment_object(channel_path)
+        if segment_obj is None or not segment_obj.has_data:
+            return
+        if segment_obj.data_type != types.String:
+            raise ValueError("Channel %s does not contain string data" % channel_path)
+
+        endianness = '>' if (self.toc_mask & toc_properties['kTocBigEndian']) else '<'
+        chunk_size = self._get_chunk_size()
+        chunk_offset = int(chunk_offset)
+        stop_chunk = self.num_chunks if num_chunks is None else num_chunks + chunk_offset
+        remaining = length
+        for chunk_index in range(chunk_offset, stop_chunk):
+            number_values = self._get_chunk_number_values(segment_obj, chunk_index)
+            if remaining is not None and remaining <= 0:
+                return
+            f.seek(self.data_position + chunk_index * chunk_size)
+            _find_object_data_position(
+                f, self._get_data_objects(), channel_path, chunk_index,
+                self._get_chunk_number_values)
+            sample_offset_in_chunk = sample_offset if chunk_index == chunk_offset else 0
+            try:
+                samples, ranges = segment_obj.read_string_samples(
+                    f, number_values, sample_offset_in_chunk, remaining, endianness, encoding)
+            except types.StringOffsetError as exc:
+                exc.chunk_index = chunk_index
+                raise
+            if remaining is not None:
+                remaining -= len(samples)
+            yield chunk_index, samples, ranges
+
+    def _get_chunk_number_values(self, obj, chunk_index):
+        """Number of values for an object in a chunk, accounting for a truncated final chunk"""
+        if self.final_chunk_lengths_override is not None and chunk_index == (self.num_chunks - 1):
+            return self.final_chunk_lengths_override.get(obj.path, 0)
+        return obj.number_values
+
     def _calculate_chunks(self):
         """
         Work out the number of chunks the data is in, for cases
@@ -637,8 +686,19 @@ class TdmsSegmentObject(BaseSegmentObject):
         elif self.data_type.size is not None:
             byte_data = fromfile(file, dtype=np.dtype('uint8'), count=number_values * self.data_type.size)
             return self.data_type.from_bytes(byte_data, endianness)
+        elif self.data_type == types.String:
+            return self.data_type.read_values(
+                file, number_values, endianness, data_size=self.data_size)
         else:
             return self.data_type.read_values(file, number_values, endianness)
+
+    def read_string_samples(self, file, number_values, offset=0, length=None, endianness="<", encoding=None):
+        """Read a range of string values for this object from one chunk"""
+        if self.data_type != types.String:
+            raise ValueError("Object %s does not contain string data" % self.path)
+        return types.String.read_samples(
+            file, number_values, offset=offset, length=length,
+            endianness=endianness, data_size=self.data_size, encoding=encoding)
 
     def new_segment_data(self):
         """Return a new array to read the data of the current section into"""
@@ -697,3 +757,25 @@ def read_property(f, endianness="<"):
     value = prop_data_type.read(f, endianness)
     log.debug("Property '%s' = %r", prop_name, value)
     return prop_name, value
+
+
+def _find_object_data_position(f, data_objects, channel_path, chunk_index, get_number_values):
+    """Find the file position of a channel's data within a chunk
+
+    Starting from the chunk's data position, seek over the data of preceding objects.
+    The file is left positioned at the start of the requested channel's data.
+    """
+    current_position = f.tell()
+    for obj in data_objects:
+        number_values = get_number_values(obj, chunk_index)
+        if obj.path == channel_path:
+            f.seek(current_position)
+            return current_position
+        if number_values == obj.number_values:
+            current_position += obj.data_size
+        elif obj.data_type.size is not None:
+            current_position += obj.data_type.size * number_values
+        else:
+            raise ValueError(
+                "Cannot skip over channel %s with an unsized type in a truncated chunk" % obj.path)
+    raise ValueError("Channel %s is not in this segment" % channel_path)

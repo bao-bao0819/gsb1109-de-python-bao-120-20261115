@@ -706,7 +706,13 @@ class TdmsChannel(object):
             For DAQmx data a dictionary of scaler id to raw scaler data will be returned.
         """
         if self._raw_data is None:
-            raw_data = self._read_channel_data(offset, length)
+            if self.data_type is types.String:
+                samples = self.read_string_samples(offset, length)
+                if samples.error is not None:
+                    raise samples.error
+                raw_data = _raw_string_data(samples)
+            else:
+                raw_data = self._read_channel_data(offset, length)
         else:
             raw_data = slice_raw_data(self._raw_data, offset, length)
 
@@ -719,6 +725,36 @@ class TdmsChannel(object):
             if raw_data.scaler_data:
                 return raw_data.scaler_data
             return raw_data.data
+
+    def read_string_samples(self, offset=0, length=None, encoding=None):
+        """ Read a small range of samples from a string channel without reading whole chunks
+
+        Only the chunk containing each requested sample is visited, and a source
+        byte range is returned for every sample.  Empty strings are returned with
+        a zero length source range, and ranges can span chunk and segment
+        boundaries.
+
+        If a chunk has invalid string offsets, reading stops in that chunk.
+        Valid samples before the bad offset are returned and ``error`` on the
+        result describes it; no bytes from the next chunk are joined to a string
+        in the affected chunk.
+
+        :param offset: Index of the first sample to read.
+        :param length: Number of samples to attempt to read.
+            If None, all samples from the offset to the end of the channel are read.
+        :param encoding: Optional text encoding, defaulting to UTF-8.
+        :returns: A :class:`nptdms.string_data.StringReadResult`
+        """
+        if self.data_type is not types.String:
+            raise ValueError("Channel %s does not contain string data" % self.path)
+        if self._raw_data is not None:
+            return _string_samples_from_array(self, offset, length, encoding)
+
+        from nptdms.string_data import StringReadResult
+        try:
+            return self._reader.read_string_samples(self.path, offset, length, encoding)
+        except KeyError:
+            return StringReadResult([], [])
 
     def time_track(self, absolute_time=False, accuracy='ns'):
         """Return an array of time or the independent variable for this channel
@@ -1036,6 +1072,34 @@ def _get_byte_ranges(reader, path):
     if reader is None:
         raise RuntimeError("Byte ranges are only available when reading the file with byte_ranges=True")
     return reader.get_byte_ranges(path)
+
+
+def _raw_string_data(result):
+    """Wrap string samples in the raw data container used for channel reads"""
+    from nptdms.channel_data import RawDataSlice
+    return RawDataSlice(np.array(result.samples, dtype=object), {})
+
+
+def _string_samples_from_array(channel, offset=0, length=None, encoding=None):
+    """Return string samples from an already read channel
+
+    Source byte ranges are not available once data has been read into memory,
+    so ``source_ranges`` is None in the returned result.
+    """
+    from nptdms.string_data import StringReadResult
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+    if length is not None and length < 0:
+        raise ValueError("length must be non-negative")
+    data = channel.raw_data
+    stop = None if length is None else offset + length
+    samples = []
+    for value in data[offset:stop]:
+        if isinstance(value, bytes):
+            samples.append(value.decode(encoding or 'utf-8', errors='replace'))
+        else:
+            samples.append(str(value))
+    return StringReadResult(samples, None)
 
 
 class FileStatus:

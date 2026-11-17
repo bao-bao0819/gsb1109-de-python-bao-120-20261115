@@ -8,10 +8,12 @@ import numpy as np
 import struct
 
 from nptdms.common import toc_properties
+from nptdms import types
 from nptdms.utils import Timer
 from nptdms.base_segment import RawChannelDataChunk
 from nptdms.tdms_segment import TdmsSegment, SegmentIndexCache
 from nptdms.byte_ranges import merge_byte_ranges
+from nptdms.string_data import StringReadResult
 from nptdms.log import log_manager
 
 
@@ -231,6 +233,106 @@ class TdmsReader(object):
                 values_read += len(chunk) - skip
                 trim = 0 if values_read < length else values_read - length
                 yield _trim_channel_chunk(chunk, skip, trim)
+
+    def read_string_samples(self, channel_path, offset=0, length=None, encoding=None):
+        """ Read a small range of samples from a string channel
+
+        Only the chunks containing the requested samples are read, and only the
+        offset table and string bytes for those samples are loaded.  The result
+        includes a source byte range for every sample.
+
+        If a chunk contains invalid string offsets, reading stops in that chunk
+        and the result's ``error`` attribute describes the problem.  Valid samples
+        from earlier chunks and from before the bad offset are returned, and no
+        bytes from a later chunk are combined into a string.
+
+        :param channel_path: The path of the channel object to read data for
+        :param offset: Index of the first sample to read.
+        :param length: Number of samples to attempt to read, or None to read to the end.
+        :param encoding: Optional text encoding, defaulting to UTF-8.
+        :returns: A :class:`nptdms.string_data.StringReadResult`
+        """
+        self._ensure_open()
+        if self._segments is None:
+            raise RuntimeError("Cannot read data unless metadata has first been read")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        if length is not None and length < 0:
+            raise ValueError("length must be non-negative")
+
+        result = StringReadResult([], [], None)
+        object_metadata = self.object_metadata.get(channel_path)
+        if object_metadata is None or object_metadata.data_type != types.String:
+            if object_metadata is None:
+                raise KeyError("No object with path %s" % channel_path)
+            raise ValueError("Channel %s does not contain string data" % channel_path)
+
+        max_length_from_offset = object_metadata.num_values - offset
+        if length is None:
+            length = max(0, max_length_from_offset)
+        else:
+            length = min(length, max(0, max_length_from_offset))
+        if length == 0:
+            return result
+
+        try:
+            (first_segment, segment_offsets) = self._segment_channel_offsets[channel_path]
+        except KeyError:
+            with Timer(log, "Build data index for channel"):
+                self._build_index(channel_path)
+            (first_segment, segment_offsets) = self._segment_channel_offsets[channel_path]
+
+        end_index = offset + length
+        start_segment = first_segment + np.searchsorted(segment_offsets, offset, side='right')
+        end_segment = first_segment + np.searchsorted(segment_offsets, end_index, side='left')
+
+        remaining = length
+        for segment_index, segment in enumerate(
+                self._segments[start_segment:end_segment + 1], start=start_segment):
+            self._verify_segment_start(segment)
+            segment_obj = segment.get_segment_object(channel_path)
+            chunk_size = 0 if (segment_obj is None or not segment_obj.has_data) else segment_obj.number_values
+            if chunk_size == 0:
+                continue
+            segment_start_index = (
+                0 if segment_index == first_segment else segment_offsets[segment_index - first_segment - 1])
+            chunk_offset = 0
+            sample_offset_in_chunk = 0
+            num_chunks = segment.num_chunks
+
+            if segment_index == start_segment:
+                num_values_to_skip = offset - segment_start_index
+                chunk_offset = num_values_to_skip // chunk_size
+                sample_offset_in_chunk = num_values_to_skip % chunk_size
+                num_chunks -= chunk_offset
+            if segment_index == end_segment:
+                segment_end_index = segment_offsets[segment_index - first_segment]
+                num_values_to_trim = segment_end_index - end_index
+                final_chunk_size = (segment_end_index - segment_start_index) % chunk_size
+                final_chunk_size = chunk_size if final_chunk_size == 0 else final_chunk_size
+                if num_values_to_trim >= final_chunk_size:
+                    num_chunks -= 1
+                    num_values_to_trim -= final_chunk_size
+                num_chunks -= num_values_to_trim // chunk_size
+
+            try:
+                chunks = segment.read_string_samples_for_channel(
+                    self._file, channel_path, sample_offset_in_chunk, remaining,
+                    chunk_offset, num_chunks, encoding)
+                for chunk_index, samples, source_ranges in chunks:
+                    result.samples.extend(samples)
+                    result.source_ranges.extend(source_ranges)
+                    remaining -= len(samples)
+                    if remaining <= 0:
+                        return result
+            except types.StringOffsetError as exc:
+                exc.segment_index = segment_index
+                # Include any valid samples from the start of the affected chunk
+                result.samples.extend(exc.samples)
+                result.source_ranges.extend(exc.source_ranges)
+                result.error = exc
+                return result
+        return result
 
     def read_channel_chunk_for_index(self, channel_path, index):
         """ Read the chunk containing the given index
