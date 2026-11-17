@@ -35,6 +35,15 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
+class PublicParseError(ValueError):
+    """
+    Raised when a calendar component cannot be parsed.
+
+    The message only names the component type.  It never contains a summary,
+    description, attendee or any other property value.
+    """
+
+
 class Attendee(str):
     def __init__(self, address: str) -> None:
         self.address = address
@@ -115,6 +124,48 @@ class Event:
     def __str__(self) -> str:
         return "%s: %s (%s)" % (self.start, self.summary, self.end - self.start)
 
+    @property
+    def busy(self) -> bool:
+        """
+        Whether this event blocks the calendar resource.
+
+        :return: True if the event is busy
+        """
+        return self.occupies_resource()
+
+    @property
+    def occupancy(self) -> str:
+        """
+        Public occupancy state of this event.
+
+        :return: ``BUSY`` or ``FREE``
+        """
+        return "BUSY" if self.occupies_resource() else "FREE"
+
+    def occupies_resource(self) -> bool:
+        """
+        Check whether this event blocks the calendar resource.
+
+        Transparent events are free, cancelled events do not occupy a
+        resource either.  A private event still occupies its time range.
+
+        :return: True if the event is busy
+        """
+        if self.transparent:
+            return False
+        return not (self.status and str(self.status).upper() == "CANCELLED")
+
+    def to_public(self, policy=None) -> Event:
+        """
+        Create a public, redacted copy of this event.
+
+        :param policy: :class:`icalevents.public.PublicExportPolicy` or mapping
+        :return: redacted event
+        """
+        from .public import redact_event
+
+        return redact_event(self, policy)
+
     def astimezone(self, tzinfo: _tzinfo) -> Event:
         if type(self.start) is datetime:
             self.start = self.start.astimezone(tzinfo)
@@ -164,6 +215,8 @@ class Event:
         ne.floating = self.floating
         ne.status = self.status
         ne.url = self.url
+        ne.sequence = self.sequence
+        ne.recurrence_id = self.recurrence_id
 
         return ne
 
@@ -175,6 +228,41 @@ def encode(value: vText | None) -> str | None:
         return str(value)
     except UnicodeEncodeError:
         return str(value.encode("utf-8"))
+
+
+def safe_component_value(component: Component | None, name: str) -> str | None:
+    """
+    Read a textual property without ever embedding the value in an error.
+
+    A malformed property can raise while it is being decoded.  The exception
+    is re-raised without the original message so that a summary, description
+    or attendee cannot leak through an error string.
+
+    :param component: iCal component
+    :param name: property name
+    :return: encoded property value or None
+    """
+    if component is None or component.get(name) is None:
+        return None
+    try:
+        return encode(component.get(name))
+    except Exception:
+        raise ValueError("Invalid %s in calendar component" % name.upper()) from None
+
+
+def describe_parse_error(component: Component | None) -> str:
+    """
+    Build a parse error message which cannot contain private property values.
+
+    The component name and the property key are safe: they are structural
+    iCalendar field names.  Values such as the description or the attendee
+    address are never inserted into the message.
+
+    :param component: component which failed to parse
+    :return: privacy safe error description
+    """
+    name = getattr(component, "name", None)
+    return "Unable to parse %s component" % (name or "calendar")
 
 
 def create_event(component: Component, strict: bool) -> Event:
@@ -211,19 +299,25 @@ def create_event(component: Component, strict: bool) -> Event:
     else:  # compute implicit end as start + 0
         event.end = event.start
 
-    event.summary = encode(component.get("summary"))
-    event.description = encode(component.get("description"))
+    if component.get("summary") is not None:
+        event.summary = safe_component_value(component, "summary")
+    if component.get("description") is not None:
+        event.description = safe_component_value(component, "description")
     event.all_day = type(component.get("dtstart").dt) is date
     if component.get("rrule"):
         event.recurring = True
-    event.location = encode(component.get("location"))
+    if component.get("location") is not None:
+        event.location = safe_component_value(component, "location")
 
     if component.get("attendee"):
         attendees = component.get("attendee")
-        if type(attendees) is list:
-            event.attendee = [Attendee(attendee) for attendee in attendees]
-        elif attendees:
-            event.attendee = Attendee(attendees)
+        try:
+            if type(attendees) is list:
+                event.attendee = [Attendee(attendee) for attendee in attendees]
+            else:
+                event.attendee = Attendee(attendees)
+        except Exception:
+            raise ValueError("Invalid ATTENDEE in calendar component") from None
 
     try:
         event.uid = component.get("uid").encode("utf-8").decode("ascii")
@@ -231,7 +325,10 @@ def create_event(component: Component, strict: bool) -> Event:
         event.uid = str(uuid4())  # Be nice - treat every event as unique
 
     if component.get("organizer"):
-        event.organizer = component.get("organizer").encode("utf-8").decode("ascii")
+        try:
+            event.organizer = component.get("organizer").encode("utf-8").decode("ascii")
+        except UnicodeDecodeError:
+            raise ValueError("Invalid ORGANIZER in calendar component") from None
     else:
         event.organizer = str(None)
 
@@ -264,17 +361,16 @@ def create_event(component: Component, strict: bool) -> Event:
         event.sequence = component.get("sequence")
 
     if component.get("categories"):
-        categories = component.get("categories").cats
         encoded_categories = list()
-        for category in categories:
+        for category in component.get("categories").cats:
             encoded_categories.append(encode(category))
         event.categories = encoded_categories
 
-    if component.get("status"):
-        event.status = encode(component.get("status"))
+    if component.get("status") is not None:
+        event.status = safe_component_value(component, "status")
 
-    if component.get("url"):
-        event.url = encode(component.get("url"))
+    if component.get("url") is not None:
+        event.url = safe_component_value(component, "url")
 
     return event
 
@@ -306,7 +402,12 @@ def parse_events(
     if not content:
         raise ValueError("Content is invalid!")
 
-    calendar = Calendar.from_ical(content)
+    try:
+        calendar = Calendar.from_ical(content)
+    except Exception:
+        # icalendar echoes the raw feed in some parse errors, which would
+        # publish descriptions and attendees through the exception message.
+        raise PublicParseError("Unable to parse calendar content") from None
 
     # > Will be deprecated ========================
     # Calendar.from_ical already parses timezones as specified in the ical.
@@ -369,12 +470,21 @@ def parse_events(
                 exceptions[exdate[0:8]] = exdate
 
         if component.name == "VEVENT":
-            e = create_event(component, strict)
+            try:
+                e = create_event(component, strict)
+            except PublicParseError:
+                raise
+            except Exception:
+                # The original exception can quote component values (for
+                # example a malformed description), so it is replaced by a
+                # message which only names the component type.
+                raise PublicParseError(describe_parse_error(component)) from None
 
             # make rule.between happy and provide from, to points in time that have the same format as dtstart
             if type(e.start) is date and not e.recurring:
-                f, t = date(start.year, start.month, start.day), date(
-                    end.year, end.month, end.day
+                f, t = (
+                    date(start.year, start.month, start.day),
+                    date(end.year, end.month, end.day),
                 )
             elif type(e.start) is datetime and e.start.tzinfo:
                 f = (

@@ -30,6 +30,26 @@ Google:
 
   es  = events(<Google Calendar URL>)
 
+Public subscriptions:
+---------------------
+
+A public subscription may only publish resource occupancy. Summaries,
+descriptions, locations, attendees, organizers, categories and URLs are
+redacted; times, the busy/free state and recurring instance relations are
+preserved.
+
+.. code:: python
+
+  from icalevents.icalevents import events
+  from icalevents.public import PublicExportPolicy, export_feed
+
+  es = events(<iCal URL>, public=True)
+  es = events(<iCal URL>, policy=PublicExportPolicy(anonymize_uid=True))
+  redacted = export_feed(open("calendar.ics", "rb").read())
+
+Transparent and cancelled events stay in the export as free entries, while
+private and confidential events stay as anonymized occupancy entries.
+
 
 Example
 =======
@@ -115,6 +135,14 @@ icalevents.icalparser module
 ----------------------------
 
 .. automodule:: icalevents.icalparser
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+icalevents.public module
+------------------------
+
+.. automodule:: icalevents.public
    :members:
    :undoc-members:
    :show-inheritance:

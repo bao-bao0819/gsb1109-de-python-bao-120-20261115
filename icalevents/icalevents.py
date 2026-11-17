@@ -8,6 +8,7 @@ import urllib3
 
 from .icalparser import Event, parse_events
 from .icaldownload import ICalDownload
+from .public import PublicExportPolicy, public_events
 
 
 # Lock for event data
@@ -29,6 +30,8 @@ def events(
     tzinfo: _tzinfo | None = None,
     sort: bool = False,
     strict: bool = False,
+    public: bool = False,
+    policy: PublicExportPolicy | None = None,
 ) -> list[Event]:
     """
     Get all events form the given iCal URL occurring in the given time range.
@@ -42,6 +45,8 @@ def events(
     :param tzinfo: return values in specified tz
     :param sort: sort return values
     :param strict: return dates, datetimes and datetime with timezones as specified in ical
+    :param public: export events for a public subscription (redacted)
+    :param policy: public export policy when ``public`` is set
     :sort sorts events by start time
 
     :return events
@@ -64,6 +69,9 @@ def events(
         content, start=start, end=end, tzinfo=tzinfo, sort=sort, strict=strict
     )
 
+    if public or policy is not None:
+        found_events = public_events(found_events, policy)
+
     if sort:
         found_events.sort()
 
@@ -78,6 +86,8 @@ def request_data(
     start: datetime | None,
     end: datetime | None,
     fix_apple: bool,
+    public: bool = False,
+    policy: PublicExportPolicy | None = None,
 ) -> None:
     """
     Request data, update local data cache and remove this Thread from queue.
@@ -89,6 +99,8 @@ def request_data(
     :param start: start date
     :param end: end date
     :param fix_apple: fix known Apple iCal issues
+    :param public: export events for a public subscription (redacted)
+    :param policy: public export policy when ``public`` is set
     """
     data = []
 
@@ -100,6 +112,8 @@ def request_data(
             start=start,
             end=end,
             fix_apple=fix_apple,
+            public=public,
+            policy=policy,
         )
     finally:
         update_events(key, data)
@@ -114,6 +128,8 @@ def events_async(
     string_content: bytes | str | None = None,
     end: datetime | None = None,
     fix_apple: bool = False,
+    public: bool = False,
+    policy: PublicExportPolicy | None = None,
 ) -> None:
     """
     Trigger an asynchronous data request.
@@ -125,10 +141,22 @@ def events_async(
     :param start: start date
     :param end: end date
     :param fix_apple: fix known Apple iCal issues
+    :param public: export events for a public subscription (redacted)
+    :param policy: public export policy when ``public`` is set
     """
     t = Thread(
         target=request_data,
-        args=(key, url, file, string_content, start, end, fix_apple),
+        args=(
+            key,
+            url,
+            file,
+            string_content,
+            start,
+            end,
+            fix_apple,
+            public,
+            policy,
+        ),
     )
 
     with event_lock:
