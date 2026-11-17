@@ -23,6 +23,13 @@ Helpers
 
     :py:class:`Group` - a collection of metadata relating to one entity.
 
+Reports
+-------
+
+    :py:class:`ProteinSupportReport` - protein support summary.
+
+    :py:func:`protein_support` - summarize peptide-to-protein support.
+
 
 Internals
 ---------
@@ -45,8 +52,11 @@ these classes working in concert.
 -------------------------------------------------------------------------------
 """
 
+import os
 import re
 import warnings
+
+from dataclasses import dataclass
 
 try:
     import pandas as pd
@@ -54,7 +64,9 @@ except ImportError:
     pd = None
 
 
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
+from dataclasses import dataclass
+from urllib.parse import unquote, urlparse
 
 from pyteomics.auxiliary import _file_obj
 from pyteomics.auxiliary import cvstr
@@ -559,6 +571,1275 @@ class Group(OrderedDict):
         return value
 
 
+_NULL_STRINGS = {'', 'null', 'none', 'nan', 'n/a', 'na'}
+
+
+def _is_null(value):
+    if value is None:
+        return True
+    if isinstance(value, float) and value != value:
+        return True
+    try:
+        if pd is not None and not isinstance(value, (str, bytes, tuple, list, set, dict)):
+            result = pd.isna(value)
+            if isinstance(result, bool) and result:
+                return True
+    except (TypeError, ValueError):
+        pass
+    return isinstance(value, str) and value.strip().lower() in _NULL_STRINGS
+
+
+def _as_text(value):
+    if _is_null(value):
+        return None
+    return str(value).strip()
+
+
+def _normalize_description(value):
+    if _is_null(value):
+        return None
+    if isinstance(value, (list, tuple)):
+        parts = [_as_text(item) for item in value]
+        parts = [part for part in parts if part]
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0].strip('[]')
+        return '|'.join(parts).strip('[]')
+    return _as_text(value)
+
+
+def _iter_table_records(table):
+    """Yield rows of an :class:`_MzTabTable` or a :class:`pandas.DataFrame`."""
+    if table is None:
+        return
+    if isinstance(table, dict):
+        rows = table.get('rows', [])
+    elif hasattr(table, 'header') and hasattr(table, 'rows'):
+        header = table.header or []
+        rows = [dict(zip(header, row)) for row in table.rows]
+    elif hasattr(table, 'to_dict'):
+        rows = table.to_dict('records')
+    else:
+        rows = table
+    for row in rows:
+        if isinstance(row, dict):
+            yield row
+        else:
+            yield dict(row)
+
+
+def _split_accessions(value):
+    """Split the accession field of an mzTab row into individual accessions.
+
+    mzTab normally stores one accession per row, but several exporters use
+    comma, semicolon or pipe separated lists.  Decorated FASTA identifiers
+    such as ``sp|P12345|NAME_HUMAN`` are kept intact.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        parts = []
+        for item in value:
+            parts.extend(_split_accessions(item))
+        return list(OrderedDict.fromkeys(parts))
+    text = _as_text(value)
+    if text is None:
+        return []
+    parts = [part.strip() for part in re.split(r'\s*[;,]\s*', text) if part.strip()]
+    out = []
+    for part in parts:
+        if '|' in part and not re.match(r'^[A-Za-z][A-Za-z0-9_.-]*\|[^|]+\|', part):
+            out.extend(piece.strip() for piece in part.split('|') if piece.strip())
+        else:
+            out.append(part)
+    return list(OrderedDict.fromkeys(out))
+
+
+_TERMINAL_POSITION_ALIASES = {
+    'n-term': 'N-term',
+    'nterm': 'N-term',
+    'n terminal': 'N-term',
+    'protein n-term': 'N-term',
+    'protein n-terminal': 'N-term',
+    'c-term': 'C-term',
+    'cterm': 'C-term',
+    'c terminal': 'C-term',
+    'protein c-term': 'C-term',
+    'protein c-terminal': 'C-term',
+}
+
+_MOD_MASS_ALIASES = (
+    (15.99491462, 'UNIMOD:35'),
+    (42.01056468, 'UNIMOD:1'),
+    (57.02146372, 'UNIMOD:4'),
+    (79.96633089, 'UNIMOD:21'),
+    (0.98401558, 'UNIMOD:7'),
+)
+
+_MOD_NAME_ALIASES = {
+    'oxidation': 'UNIMOD:35',
+    'oxidation (m)': 'UNIMOD:35',
+    'acetyl': 'UNIMOD:1',
+    'acetylation': 'UNIMOD:1',
+    'carbamidomethyl': 'UNIMOD:4',
+    'carbamidomethylation': 'UNIMOD:4',
+    'phospho': 'UNIMOD:21',
+    'phosphorylation': 'UNIMOD:21',
+    'deamidation': 'UNIMOD:7',
+    'deamidated': 'UNIMOD:7',
+    'methyl': 'UNIMOD:34',
+    'methylation': 'UNIMOD:34',
+    'dimethyl': 'UNIMOD:36',
+    'trimethyl': 'UNIMOD:37',
+    'gly-gly': 'UNIMOD:121',
+    'diglycine': 'UNIMOD:121',
+    'ubiquitination': 'UNIMOD:121',
+}
+
+
+def _normalize_position(position, sequence=None, normalize_termini=True):
+    text = _as_text(position)
+    if text is None:
+        return ''
+    key = text.casefold().replace('_', '-').replace(' ', ' ').strip()
+    if normalize_termini and key in _TERMINAL_POSITION_ALIASES:
+        return _TERMINAL_POSITION_ALIASES[key]
+    if normalize_termini and sequence and re.fullmatch(r'\d+', key):
+        number = int(key)
+        if number == 0:
+            return 'N-term'
+        if number == len(sequence) + 1:
+            return 'C-term'
+        return str(number)
+    return key
+
+
+_MOD_ACCESSION_ALIASES = {
+    'MOD:00046': 'UNIMOD:21',
+    'MOD:00047': 'UNIMOD:21',
+    'MOD:00048': 'UNIMOD:21',
+    'MOD:00798': 'UNIMOD:4',
+    'MOD:00394': 'UNIMOD:1',
+    'MOD:00696': 'UNIMOD:35',
+    'MOD:00684': 'UNIMOD:7',
+}
+
+
+def _normalize_modification_name(name, mass_tolerance=1e-5):
+    """Return a stable equivalence key for a modification name.
+
+    Different textual forms of the same modification are mapped to one key:
+    CV accessions are normalized, and the small table above bridges common
+    names / CHEMMOD masses to their Unimod accessions.  The original text is
+    never discarded by the caller.
+    """
+    text = _as_text(name)
+    if text is None:
+        return '', None
+    text = text.strip()
+    match = re.match(r'^(?P<prefix>[A-Za-z][A-Za-z0-9_.-]*):(?P<value>.+)$', text)
+    if match:
+        prefix = match.group('prefix').upper()
+        value = match.group('value').strip()
+        if prefix == 'CHEMMOD':
+            try:
+                mass = float(value)
+            except ValueError:
+                return 'chemmod:' + value.casefold(), mass
+            for known_mass, accession in _MOD_MASS_ALIASES:
+                if abs(mass - known_mass) <= max(mass_tolerance, 1e-6):
+                    return accession, mass
+            return 'chemmod:%.10f' % mass, mass
+        if prefix in ('UNIMOD', 'MOD'):
+            try:
+                number = int(value)
+            except ValueError:
+                return prefix.casefold() + ':' + value.casefold(), None
+            accession = '%s:%05d' % (prefix, number) if prefix == 'MOD' \
+                else '%s:%d' % (prefix, number)
+            return _MOD_ACCESSION_ALIASES.get(accession, accession), None
+        return '%s:%s' % (prefix, value.casefold()), None
+    folded = re.sub(r'\s+', ' ', text.casefold()).strip()
+    if folded in _MOD_NAME_ALIASES:
+        return _MOD_NAME_ALIASES[folded], None
+    return 'name:' + folded, None
+
+
+def _parse_modifications(value, sequence=None, mass_tolerance=1e-5,
+                         normalize_termini=True, rules=None):
+    """Parse an mzTab ``modifications`` cell.
+
+    Returns
+    -------
+    list of dict
+        Each item has ``raw``, ``position``, ``name``, ``equivalent`` and
+        ``mass`` keys.  ``equivalent`` is the canonical identity used to merge
+        equivalent textual forms.
+    """
+    text = _as_text(value)
+    if text is None:
+        return []
+    parsed = []
+    for raw_item in re.split(r'\s*,\s*(?![^(]*\))', text):
+        raw_item = raw_item.strip()
+        if not raw_item:
+            continue
+        match = re.match(r'^(?P<position>[^-]+?)\s*-\s*(?P<name>.+)$', raw_item)
+        if match:
+            position = match.group('position').strip()
+            name = match.group('name').strip()
+        else:
+            position = ''
+            name = raw_item
+        canonical_position = _normalize_position(
+            position, sequence, normalize_termini=normalize_termini)
+        _, mass = _normalize_modification_name(name, mass_tolerance)
+        if rules is not None:
+            equivalent = str(rules(canonical_position, name))
+        else:
+            equivalent, _ = _normalize_modification_name(name, mass_tolerance)
+        parsed.append({
+            'raw': raw_item,
+            'position': canonical_position,
+            'name': name,
+            'equivalent': equivalent,
+            'mass': mass,
+        })
+    parsed.sort(key=lambda item: (
+        item['position'].zfill(12) if item['position'].isdigit() else item['position'],
+        item['equivalent']))
+    return parsed
+
+
+def _peptide_identity(sequence, modifications, mass_tolerance=1e-5,
+                      normalize_termini=True, rules=None):
+    sequence = _as_text(sequence) or ''
+    parsed = _parse_modifications(
+        modifications, sequence, mass_tolerance, normalize_termini, rules)
+    key = sequence
+    if parsed:
+        key += '#' + ';'.join(
+            '%s|%s' % (item['position'], item['equivalent']) for item in parsed)
+    display = sequence
+    if parsed:
+        display += '[' + ';'.join(
+            '%s:%s' % (item['position'], item['equivalent']) for item in parsed) + ']'
+    return {
+        'key': key,
+        'sequence': sequence,
+        'modified_peptide': display,
+        'modifications': tuple(
+            '%s|%s' % (item['position'], item['equivalent']) for item in parsed),
+        'parsed_modifications': parsed,
+    }
+
+
+def _normalize_run_location(location):
+    text = _as_text(location)
+    if text is None:
+        return None
+    try:
+        parsed = urlparse(text)
+        if parsed.scheme:
+            path = unquote(parsed.path)
+        else:
+            path = text
+    except ValueError:
+        path = text
+    path = path.replace('\\', '/').rstrip('/')
+    return path or text
+
+
+def _build_run_map(metadata):
+    runs = {}
+    for key, value in metadata.items():
+        match = re.match(r'ms_run\[(\d+)\]-location$', key)
+        if match:
+            runs[int(match.group(1))] = _normalize_run_location(value)
+    return runs
+
+
+def _normalize_spectra_ref(value, run_map):
+    text = _as_text(value)
+    if text is None:
+        return None
+    refs = []
+    for part in text.split('|'):
+        part = part.strip()
+        if not part:
+            continue
+        match = re.match(r'ms_run\[(\d+)\]:(.*)$', part)
+        if match:
+            index = int(match.group(1))
+            run = run_map.get(index, 'ms_run[%d]' % index)
+            rest = match.group(2).strip()
+            rest = re.sub(r'\s+', '', rest)
+            refs.append('%s:%s' % (run, rest))
+        else:
+            refs.append(part)
+    return '|'.join(refs) if refs else None
+
+
+def _round_number(value, digits=4):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return round(number, digits)
+
+
+def _source_identity(mz_tab, index=0):
+    spec = getattr(getattr(mz_tab, 'file', None), '_file_spec', None)
+    if isinstance(spec, (str, bytes, os.PathLike)):
+        path = os.fspath(spec)
+        name = os.path.basename(path)
+        return name or path or 'source[%d]' % (index + 1)
+    name = getattr(getattr(mz_tab, 'file', None), 'name', None)
+    if isinstance(name, str) and name:
+        return os.path.basename(name) or name
+    return 'source[%d]' % (index + 1)
+
+
+def _disambiguate_source_ids(source_ids):
+    counts = defaultdict(int)
+    out = []
+    for source_id in source_ids:
+        counts[source_id] += 1
+        count = counts[source_id]
+        out.append(source_id if count == 1 else '%s#%d' % (source_id, count))
+    return out
+
+
+def _record_psm_id(row):
+    value = row.get('PSM_ID', row.get('psm_id'))
+    if _is_null(value):
+        return None
+    return str(value)
+
+
+def _record_decoy(row):
+    for key in row:
+        if key.endswith('_decoy_peptide') or key.endswith('_decoy'):
+            value = row[key]
+            if _is_null(value):
+                return None
+            try:
+                return bool(int(value))
+            except (TypeError, ValueError):
+                return str(value).strip().lower() in ('true', 'yes', 'decoy')
+    return None
+
+
+def _record_unique_flag(row):
+    value = row.get('unique')
+    if _is_null(value):
+        return None
+    try:
+        return bool(int(value))
+    except (TypeError, ValueError):
+        text = str(value).strip().lower()
+        if text in ('true', 'yes', 'unique', '1'):
+            return True
+        if text in ('false', 'no', 'shared', '0'):
+            return False
+    return None
+
+
+@dataclass
+class ProteinSupportRecord:
+    accession: str
+    description: str = None
+    unique_peptides: int = 0
+    shared_peptides: int = 0
+    total_peptides: int = 0
+    unique_psms: int = 0
+    shared_psms: int = 0
+    total_psms: int = 0
+    uniquely_identified: bool = False
+    support_type: str = 'none'
+    supporting_peptides: tuple = ()
+    unique_peptide_sequences: tuple = ()
+    shared_peptide_sequences: tuple = ()
+    shared_with: tuple = ()
+    modification_forms: tuple = ()
+    sources: tuple = ()
+    raw_psm_count: int = 0
+    psm_count: int = 0
+    unique_flags: tuple = ()
+    unique_flag_conflict: bool = False
+    in_protein_table: bool = False
+    ambiguity_members: tuple = ()
+    protein_coverage: object = None
+
+    @property
+    def unique_support(self):
+        return self.unique_peptides
+
+    @property
+    def shared_support(self):
+        return self.shared_peptides
+
+    @property
+    def total_support(self):
+        return self.total_peptides
+
+    @property
+    def n_unique_peptides(self):
+        return self.unique_peptides
+    @property
+    def n_shared_peptides(self):
+        return self.shared_peptides
+
+    @property
+    def n_peptides(self):
+        return self.total_peptides
+
+    @property
+    def n_unique_psms(self):
+        return self.unique_psms
+
+    @property
+    def n_shared_psms(self):
+        return self.shared_psms
+
+    @property
+    def n_psms(self):
+        return self.total_psms
+
+    @property
+    def unique_psm_count(self):
+        return self.unique_psms
+
+    @property
+    def shared_psm_count(self):
+        return self.shared_psms
+
+    @property
+    def is_unique(self):
+        return self.uniquely_identified
+
+    @property
+    def is_shared(self):
+        return self.support_type == 'shared'
+
+    @property
+    def assigned(self):
+        return self.total_peptides > 0
+
+    def as_dict(self):
+        data = dict(self.__dict__)
+        data['unique_support'] = self.unique_support
+        data['shared_support'] = self.shared_support
+        data['total_support'] = self.total_support
+        data['n_unique_peptides'] = self.n_unique_peptides
+        data['n_shared_peptides'] = self.n_shared_peptides
+        data['n_peptides'] = self.n_peptides
+        data['n_unique_psms'] = self.n_unique_psms
+        data['n_shared_psms'] = self.n_shared_psms
+        data['n_psms'] = self.n_psms
+        data['unique_identification'] = self.uniquely_identified
+        data['is_unique'] = self.is_unique
+        data['is_shared'] = self.is_shared
+        return data
+
+    def __getitem__(self, key):
+        return self.as_dict()[key]
+
+    def get(self, key, default=None):
+        return self.as_dict().get(key, default)
+
+
+@dataclass
+class PeptideSupportRecord:
+    peptide: str
+    sequence: str
+    modified_peptide: str = None
+    modifications: tuple = ()
+    raw_modifications: tuple = ()
+    proteins: tuple = ()
+    n_proteins: int = 0
+    is_unique: bool = False
+    is_shared: bool = False
+    evidence_count: int = 0
+    raw_evidence_count: int = 0
+    psm_count: int = 0
+    sources: tuple = ()
+    modification_forms: tuple = ()
+    unique_flags: tuple = ()
+    unique_flag_conflict: bool = False
+
+    @property
+    def unique_support(self):
+        return self.is_unique
+
+    @property
+    def shared_support(self):
+        return self.is_shared
+
+    def as_dict(self):
+        return dict(self.__dict__)
+
+    def __getitem__(self, key):
+        return self.as_dict()[key]
+
+    def get(self, key, default=None):
+        return self.as_dict().get(key, default)
+
+
+class SupportRecordCollection(list):
+    """A list of support records that also supports lookup by its key field."""
+
+    def __init__(self, records=(), key='accession'):
+        super(SupportRecordCollection, self).__init__(records)
+        self.key = key
+
+    @staticmethod
+    def _key_of(record, key):
+        if isinstance(record, dict):
+            return record.get(key)
+        return getattr(record, key)
+
+    def _index(self):
+        return {self._key_of(record, self.key): record for record in self}
+
+    def __call__(self, key, default=None):
+        return self.get(key, default)
+
+    def __getitem__(self, item):
+        if isinstance(item, str):
+            try:
+                return self._index()[item]
+            except KeyError:
+                raise KeyError(item)
+        return super(SupportRecordCollection, self).__getitem__(item)
+
+    def __contains__(self, item):
+        if isinstance(item, str):
+            return item in self._index()
+        return super(SupportRecordCollection, self).__contains__(item)
+
+    def get(self, key, default=None):
+        return self._index().get(key, default)
+
+    def keys(self):
+        return [self._key_of(record, self.key) for record in self]
+
+    def values(self):
+        return list(self)
+
+    def items(self):
+        return [(self._key_of(record, self.key), record) for record in self]
+
+
+class ProteinSupportReport(object):
+    """Summarized protein support derived from an mzTab file.
+
+    The report keeps the peptide-to-protein mapping as a many-to-many edge
+    table.  A peptide is *unique* for a protein only if every observed link of
+    that peptide points to that single protein.  A peptide linked to two or
+    more proteins is *shared*, and proteins supported exclusively by shared
+    peptides are never marked as uniquely identified.
+
+    Attributes
+    ----------
+    proteins : list of :class:`ProteinSupportRecord`
+        One record per protein accession.
+    peptides : list of :class:`PeptideSupportRecord`
+        One record per distinct (sequence, merged modification) peptide.
+    links : list of dict
+        One row per peptide-protein pair.
+    evidence : list of dict
+        Deduplicated spectrum evidence, with all source exports recorded.
+    """
+
+    def __init__(self, proteins, peptides, links, evidence, sources=()):
+        self.proteins = SupportRecordCollection(proteins, 'accession')
+        self.peptides = SupportRecordCollection(peptides, 'peptide')
+        self.links = SupportRecordCollection(links, 'peptide')
+        self.evidence = SupportRecordCollection(evidence, 'evidence_id')
+        self.sources = tuple(sources)
+        self._by_accession = OrderedDict(
+            (record.accession, record) for record in self.proteins)
+        self._peptides_by_key = OrderedDict(
+            (record.peptide, record) for record in self.peptides)
+
+    def __len__(self):
+        return len(self.proteins)
+
+    def __iter__(self):
+        return iter(self.proteins)
+
+    def __getitem__(self, accession):
+        return self._by_accession[accession]
+
+    def __contains__(self, accession):
+        return accession in self._by_accession
+
+    @property
+    def unique_supported(self):
+        return [record for record in self.proteins if record.uniquely_identified]
+
+    @property
+    def shared_only(self):
+        return [record for record in self.proteins if record.support_type == 'shared']
+
+    @property
+    def unassigned(self):
+        return [record for record in self.proteins if record.support_type == 'none']
+
+    @property
+    def peptide_protein_links(self):
+        return self.links
+
+    @property
+    def evidences(self):
+        return self.evidence
+
+    def get(self, accession, default=None):
+        return self._by_accession.get(accession, default)
+
+    @property
+    def protein_support(self):
+        return self._by_accession
+
+    def peptide(self, peptide):
+        return self._peptides_by_key.get(peptide)
+
+    def to_dict(self, which=None):
+        """Return the report, or one of its parts, as plain Python objects."""
+        aliases = {
+            'protein': 'proteins',
+            'peptide': 'peptides',
+            'link': 'links',
+            'peptide_protein': 'links',
+            'peptide_protein_links': 'links',
+            'evidences': 'evidence',
+        }
+        if which is not None:
+            which = aliases.get(which, which)
+            if which == 'links':
+                return list(self.links)
+            if which == 'evidence':
+                return list(self.evidence)
+            if which == 'sources':
+                return list(self.sources)
+            if which == 'summary':
+                return self.summary()
+            return [record.as_dict() for record in getattr(self, which)]
+        return {
+            'proteins': [record.as_dict() for record in self.proteins],
+            'peptides': [record.as_dict() for record in self.peptides],
+            'links': list(self.links),
+            'evidence': list(self.evidence),
+            'sources': list(self.sources),
+            'summary': self.summary(),
+        }
+
+    def to_dataframe(self, which='proteins'):
+        """Return one part of the report as a :class:`pandas.DataFrame`."""
+        _require_pandas()
+        aliases = {
+            'protein': 'proteins',
+            'peptide': 'peptides',
+            'link': 'links',
+            'peptide_protein': 'links',
+            'peptide_protein_links': 'links',
+            'evidences': 'evidence',
+            'summary': 'summary',
+        }
+        which = aliases.get(which, which)
+        if which == 'summary':
+            return pd.DataFrame.from_records([self.summary()])
+        if which == 'proteins':
+            data = [record.as_dict() for record in self.proteins]
+        elif which == 'peptides':
+            data = [record.as_dict() for record in self.peptides]
+        elif which == 'links':
+            data = list(self.links)
+        elif which == 'evidence':
+            data = list(self.evidence)
+        else:
+            raise KeyError(which)
+        return pd.DataFrame.from_records(data)
+
+    @property
+    def protein_table(self):
+        return self.to_dataframe('proteins')
+
+    @property
+    def peptide_table(self):
+        return self.to_dataframe('peptides')
+
+    @property
+    def peptide_protein_table(self):
+        return self.to_dataframe('links')
+
+    @property
+    def evidence_table(self):
+        return self.to_dataframe('evidence')
+
+    def summary(self):
+        unique_proteins = sum(1 for p in self.proteins if p.uniquely_identified)
+        shared_only = sum(1 for p in self.proteins if p.support_type == 'shared')
+        raw_evidence = sum(entry['raw_claim_count'] for entry in self.evidence)
+        return {
+            'proteins': len(self.proteins),
+            'unique_proteins': unique_proteins,
+            'shared_only_proteins': shared_only,
+            'unassigned_proteins': sum(
+                1 for p in self.proteins if p.support_type == 'none'),
+            'unique_supported_proteins': sum(
+                1 for p in self.proteins if p.unique_peptides > 0),
+            'shared_supported_proteins': sum(
+                1 for p in self.proteins if p.shared_peptides > 0),
+            'peptides': len(self.peptides),
+            'unique_peptides': sum(1 for p in self.peptides if p.is_unique),
+            'shared_peptides': sum(1 for p in self.peptides if p.is_shared),
+            'links': len(self.links),
+            'evidence': len(self.evidence),
+            'raw_evidence': raw_evidence,
+            'duplicate_evidence': max(0, raw_evidence - len(self.evidence)),
+            'sources': len(self.sources),
+        }
+
+    def __repr__(self):
+        summary = self.summary()
+        return ('<ProteinSupportReport: {proteins} proteins '
+                '({unique_proteins} unique, {shared_only_proteins} shared-only), '
+                '{peptides} peptides, {evidence} evidence>').format(**summary)
+
+
+def _empty_protein_record(accession, metadata=None):
+    metadata = metadata or {}
+    return ProteinSupportRecord(
+        accession=accession,
+        description=_normalize_description(metadata.get('description')),
+        in_protein_table=bool(metadata.get('in_protein_table')),
+        ambiguity_members=tuple(_split_accessions(metadata.get('ambiguity_members'))),
+        protein_coverage=metadata.get('protein_coverage'),
+    )
+
+
+def _evidence_key(row, peptide_key, run_map, mode, source_id, ordinal):
+    if mode == 'none':
+        return ('row', source_id, ordinal)
+    spectra = _normalize_spectra_ref(row.get('spectra_ref'), run_map)
+    charge = _round_number(row.get('charge'), 0)
+    content = (
+        peptide_key,
+        charge,
+        _round_number(row.get('exp_mass_to_charge')),
+        _round_number(row.get('calc_mass_to_charge')),
+        _round_number(row.get('retention_time'), 2),
+        _as_text(row.get('pre')),
+        _as_text(row.get('post')),
+        _round_number(row.get('start'), 0),
+        _round_number(row.get('end'), 0),
+    )
+    if mode in ('auto', 'spectrum') and spectra:
+        return ('spectrum', spectra, charge,
+                _round_number(row.get('exp_mass_to_charge')), peptide_key)
+    if mode == 'spectrum':
+        return ('content',) + content
+    if mode == 'content' or any(value is not None for value in content[1:]):
+        return ('content',) + content
+    psm_id = _record_psm_id(row)
+    if psm_id is not None:
+        return ('psm-id', source_id, psm_id, peptide_key)
+    return ('row', source_id, ordinal)
+
+
+def _resolve_modification_rules(rules):
+    if rules is None:
+        return None
+    if isinstance(rules, dict):
+        mapping = dict(rules)
+
+        def lookup(position, name):
+            candidates = (
+                name, str(name).strip(), str(name).strip().casefold(),
+                '%s-%s' % (position, name), '%s-%s' % (position, str(name).strip()),
+                ('%s-%s' % (position, name)).casefold(),
+            )
+            for key in candidates:
+                if key in mapping:
+                    return mapping[key]
+            for key, value in mapping.items():
+                if str(key).casefold() in (str(candidate).casefold()
+                                           for candidate in candidates):
+                    return value
+            return _normalize_modification_name(name)[0]
+        return lookup
+
+    def lookup(position, name):
+        for args in ((position, name), ('%s-%s' % (position, name),), (name,)):
+            try:
+                value = rules(*args)
+            except TypeError:
+                continue
+            if value is not None:
+                return value
+        return _normalize_modification_name(name)[0]
+    return lookup
+
+
+def _collect_evidence(mz_tab, source_id, mode, table, mass_tolerance,
+                      normalize_termini, rules=None):
+    run_map = _build_run_map(mz_tab.metadata)
+    if table == 'auto':
+        psm_rows = list(_iter_table_records(mz_tab.spectrum_match_table))
+        table = 'psm' if psm_rows else 'peptide'
+    else:
+        psm_rows = None
+    rows = psm_rows if psm_rows is not None else list(
+        _iter_table_records(
+            mz_tab.spectrum_match_table if table == 'psm'
+            else mz_tab.peptide_table))
+    records = []
+    for ordinal, row in enumerate(rows):
+        sequence = _as_text(row.get('sequence'))
+        if not sequence:
+            continue
+        modifications = row.get('modifications')
+        peptide = _peptide_identity(
+            sequence, modifications, mass_tolerance, normalize_termini, rules)
+        accessions = _split_accessions(row.get('accession'))
+        records.append({
+            'row': row,
+            'peptide': peptide,
+            'accessions': accessions,
+            'source': source_id,
+            'ordinal': ordinal,
+            'psm_id': _record_psm_id(row),
+            'decoy': _record_decoy(row),
+            'unique': _record_unique_flag(row),
+            'key': _evidence_key(
+                row, peptide['key'], run_map, mode, source_id, ordinal),
+        })
+    return records
+
+
+def _normalize_deduplicate_option(deduplicate):
+    if isinstance(deduplicate, bool):
+        return 'auto' if deduplicate else 'none'
+    value = str(deduplicate).lower()
+    if value in ('true', 'yes', 'on'):
+        return 'auto'
+    if value in ('false', 'no', 'off'):
+        return 'none'
+    aliases = {
+        'spectrum': 'spectrum',
+        'spectra': 'spectrum',
+        'spectra_ref': 'spectrum',
+        'run': 'spectrum',
+        'content': 'content',
+        'peptide': 'content',
+        'none': 'none',
+        'off': 'none',
+        'auto': 'auto',
+    }
+    if value not in aliases:
+        raise ValueError(
+            "deduplicate must be one of 'auto', 'spectrum', 'content' or 'none'")
+    return aliases[value]
+
+
+def protein_support(source, modification_rules=None, mass_tolerance=1e-5,
+                    normalize_terminal_positions=True, deduplicate='auto',
+                    evidence_table='auto', include_unassigned=True,
+                    table_format=DATA_FRAME_FORMAT):
+    """Summarize protein support from one or more mzTab files.
+
+    Parameters
+    ----------
+    source : MzTab, str, file-like or iterable thereof
+        The mzTab input.  Passing several files is supported; evidence shared
+        between exports is counted only once.
+    modification_rules : callable, optional
+        A callable accepting ``(position, name)`` and returning an equivalence
+        key.  By default, CV accessions are normalized and common names /
+        CHEMMOD masses are mapped to their Unimod accessions.  Original raw
+        forms are always retained in ``raw_modifications`` and
+        ``modification_forms``.
+    mass_tolerance : float, optional
+        Mass tolerance (Da) used when merging CHEMMOD forms.  Default is
+        ``1e-5``.
+    normalize_terminal_positions : bool, optional
+        If :const:`True` (default), position 0 is treated as ``N-term`` and
+        position ``len(sequence) + 1`` as ``C-term``.
+    deduplicate : {'auto', 'spectrum', 'content', 'none'}, optional
+        How independent evidence is recognized.  ``'auto'``/``'spectrum'`` use
+        the normalized ``spectra_ref`` (preferred), falling back to peptide
+        content when no spectrum reference exists.  ``'content'`` ignores
+        ``spectra_ref`` and uses the peptide and measured values.  ``'none'``
+        counts every input row.  Duplicate exports therefore do not inflate
+        support by default.
+    evidence_table : {'auto', 'psm', 'peptide'}, optional
+        Use the PSM table, the peptide table, or automatically prefer PSM
+        records and fall back to peptides.
+    include_unassigned : bool, optional
+        Include proteins from the protein table even when no peptide supports
+        them.  Default is :const:`True`.
+    table_format : str, optional
+        Passed to :class:`MzTab` when `source` contains file names.
+
+    Returns
+    -------
+    ProteinSupportReport
+
+    Examples
+    --------
+    >>> report = protein_support('file.mztab')
+    >>> report['P12345'].unique_peptides
+    >>> report.protein_table
+    >>> report.peptide_protein_table
+    """
+    deduplicate = _normalize_deduplicate_option(deduplicate)
+    evidence_table = str(evidence_table).lower()
+    if evidence_table not in ('auto', 'psm', 'peptide'):
+        raise ValueError(
+            "evidence_table must be one of 'auto', 'psm' or 'peptide'")
+    if modification_rules is not None:
+        rules = _resolve_modification_rules(modification_rules)
+    else:
+        rules = None
+
+    if isinstance(source, MzTab):
+        inputs = [source]
+    elif isinstance(source, (str, bytes, os.PathLike)) or hasattr(source, 'read'):
+        inputs = [source]
+    else:
+        inputs = list(source)
+
+    mz_tabs = []
+    opened = []
+    source_ids = []
+    for index, item in enumerate(inputs):
+        if isinstance(item, MzTab):
+            mz_tab = item
+        else:
+            mz_tab = MzTab(item, table_format=table_format)
+            if isinstance(item, (str, bytes, os.PathLike)):
+                opened.append(mz_tab)
+        mz_tabs.append(mz_tab)
+        source_ids.append(_source_identity(mz_tab, index))
+    source_ids = _disambiguate_source_ids(source_ids)
+
+    try:
+        protein_metadata = OrderedDict()
+        evidence = OrderedDict()
+        evidence_by_peptide = defaultdict(list)
+        raw_claim_count = defaultdict(int)
+        source_order = []
+        run_maps = {}
+
+        for mz_tab, source_id in zip(mz_tabs, source_ids):
+            if source_id not in source_order:
+                source_order.append(source_id)
+            run_map = run_maps[source_id] = _build_run_map(mz_tab.metadata)
+            for record in _iter_table_records(mz_tab.protein_table):
+                accession = _as_text(record.get('accession'))
+                if accession is None:
+                    continue
+                protein_metadata.setdefault(accession, {
+                    'description': record.get('description'),
+                    'in_protein_table': True,
+                    'ambiguity_members': record.get('ambiguity_members'),
+                    'protein_coverage': record.get('protein_coverage'),
+                })
+
+            for item in _collect_evidence(
+                    mz_tab, source_id, deduplicate, evidence_table,
+                    mass_tolerance, normalize_terminal_positions, rules):
+                if not item['accessions']:
+                    continue
+                key = item['key']
+                entry = evidence.get(key)
+                if entry is None:
+                    entry = evidence[key] = {
+                        'key': key,
+                        'peptide': item['peptide'],
+                        'proteins': set(),
+                        'sources': set(),
+                        'psm_ids': set(),
+                        'raw_modifications': set(),
+                        'form_evidence': defaultdict(set),
+                        'spectra_ref': _normalize_spectra_ref(
+                            item['row'].get('spectra_ref'), run_map),
+                        'charge': _round_number(item['row'].get('charge'), 0),
+                        'exp_mass_to_charge': _round_number(
+                            item['row'].get('exp_mass_to_charge')),
+                        'calc_mass_to_charge': _round_number(
+                            item['row'].get('calc_mass_to_charge')),
+                        'retention_time': item['row'].get('retention_time'),
+                        'raw_claim_count': 0,
+                        'decoy': set(),
+                        'unique_flags': set(),
+                    }
+                    evidence_by_peptide[item['peptide']['key']].append(entry)
+                entry['proteins'].update(item['accessions'])
+                entry['sources'].add(source_id)
+                if item['psm_id'] is not None:
+                    entry['psm_ids'].add((source_id, item['psm_id']))
+                for parsed in item['peptide']['parsed_modifications']:
+                    entry['raw_modifications'].add(parsed['raw'])
+                    entry['form_evidence'][
+                        (parsed['position'], parsed['equivalent'])].add(source_id)
+                entry['raw_claim_count'] += 1
+                if item['decoy'] is not None:
+                    entry['decoy'].add(item['decoy'])
+                raw_claim_count[item['peptide']['key']] += 1
+                if item['unique'] is not None:
+                    entry.setdefault('unique_flags', set()).add(item['unique'])
+
+        peptide_proteins = OrderedDict()
+        for entry in evidence.values():
+            peptide_proteins.setdefault(entry['peptide']['key'], set()).update(
+                entry['proteins'])
+
+        peptides = []
+        peptide_records = OrderedDict()
+        for peptide_key, proteins in peptide_proteins.items():
+            matching = evidence_by_peptide[peptide_key]
+            first = matching[0]['peptide']
+            raw_mods = []
+            forms = OrderedDict()
+            sources = set()
+            for entry in matching:
+                sources.update(entry['sources'])
+                for raw in sorted(entry['raw_modifications']):
+                    if raw not in raw_mods:
+                        raw_mods.append(raw)
+                for parsed in entry['peptide']['parsed_modifications']:
+                    form = forms.setdefault(
+                        (parsed['position'], parsed['equivalent']), {
+                            'position': parsed['position'],
+                            'canonical': parsed['equivalent'],
+                            'names': set(),
+                            'raw_forms': set(),
+                            'sources': set(),
+                        })
+                    form['names'].add(parsed['name'])
+                    form['raw_forms'].add(parsed['raw'])
+                    form['sources'].update(
+                        entry['form_evidence'][
+                            (parsed['position'], parsed['equivalent'])])
+            for form in forms.values():
+                form['raw_forms'].intersection_update(raw_mods)
+            modification_forms = tuple(
+                {
+                    'position': form['position'],
+                    'canonical': form['canonical'],
+                    'names': tuple(sorted(form['names'])),
+                    'raw_forms': tuple(sorted(form['raw_forms'])),
+                    'sources': tuple(sorted(form['sources'])),
+                } for form in forms.values())
+            unique_flags = set()
+            for entry in matching:
+                unique_flags.update(entry.get('unique_flags') or ())
+            flag_conflict = (
+                unique_flags == {True, False}
+                or (len(proteins) > 1 and True in unique_flags))
+            if flag_conflict:
+                warnings.warn(
+                    'Peptide %r is labeled unique although its observed links '
+                    'do not establish unique support; it will be treated as '
+                    'shared.' % peptide_key)
+            peptide_is_unique = (len(proteins) == 1 and False not in unique_flags)
+            record = PeptideSupportRecord(
+                peptide=peptide_key,
+                sequence=first['sequence'],
+                modified_peptide=first['modified_peptide'],
+                modifications=first['modifications'],
+                raw_modifications=tuple(raw_mods),
+                proteins=tuple(sorted(proteins)),
+                n_proteins=len(proteins),
+                is_unique=peptide_is_unique,
+                is_shared=not peptide_is_unique,
+                evidence_count=len(matching),
+                raw_evidence_count=raw_claim_count[peptide_key],
+                psm_count=len(matching),
+                sources=tuple(sorted(sources)),
+                modification_forms=modification_forms,
+                unique_flags=tuple(sorted(unique_flags)),
+                unique_flag_conflict=flag_conflict,
+            )
+            peptide_records[peptide_key] = record
+            peptides.append(record)
+
+        links = []
+        for peptide_key, proteins in peptide_proteins.items():
+            peptide_record = peptide_records[peptide_key]
+            for accession in sorted(proteins):
+                protein_evidence = [
+                    entry for entry in evidence_by_peptide[peptide_key]
+                    if accession in entry['proteins']]
+                links.append({
+                    'peptide': peptide_key,
+                    'sequence': peptide_record.sequence,
+                    'modified_peptide': peptide_record.modified_peptide,
+                    'modifications': peptide_record.modifications,
+                    'raw_modifications': peptide_record.raw_modifications,
+                    'accession': accession,
+                    'is_unique': peptide_record.is_unique,
+                    'is_shared': peptide_record.is_shared,
+                    'is_unique_for_protein': peptide_record.is_unique,
+                    'n_proteins': peptide_record.n_proteins,
+                    'proteins': peptide_record.proteins,
+                    'evidence_count': len(protein_evidence),
+                    'raw_evidence_count': sum(
+                        entry['raw_claim_count'] for entry in protein_evidence),
+                    'sources': tuple(sorted(
+                        set().union(*(entry['sources'] for entry in protein_evidence)))),
+                })
+
+        accessions = list(protein_metadata)
+        for peptide_record in peptides:
+            for accession in peptide_record.proteins:
+                if accession not in protein_metadata:
+                    protein_metadata[accession] = {
+                        'description': None,
+                        'in_protein_table': False,
+                        'ambiguity_members': None,
+                        'protein_coverage': None,
+                    }
+                    accessions.append(accession)
+
+        peptide_by_accession = defaultdict(lambda: {'unique': [], 'shared': []})
+        for peptide_record in peptides:
+            if peptide_record.is_unique:
+                peptide_by_accession[peptide_record.proteins[0]]['unique'].append(
+                    peptide_record)
+            else:
+                for accession in peptide_record.proteins:
+                    peptide_by_accession[accession]['shared'].append(peptide_record)
+
+        evidence_by_accession = defaultdict(list)
+        for entry in evidence.values():
+            for accession in entry['proteins']:
+                evidence_by_accession[accession].append(entry)
+        peptide_is_unique = {
+            record.peptide: record.is_unique for record in peptides}
+
+        proteins = []
+        for accession in accessions:
+            unique_peptide_records = peptide_by_accession[accession]['unique']
+            shared_peptide_records = peptide_by_accession[accession]['shared']
+            protein_evidence = evidence_by_accession[accession]
+            unique_psms = sum(
+                1 for entry in protein_evidence
+                if peptide_is_unique[entry['peptide']['key']])
+            shared_psms = len(protein_evidence) - unique_psms
+            if unique_peptide_records:
+                support_type = 'unique'
+            elif shared_peptide_records:
+                support_type = 'shared'
+            else:
+                support_type = 'none'
+            shared_with = set()
+            for record in shared_peptide_records:
+                shared_with.update(record.proteins)
+            shared_with.discard(accession)
+            forms = OrderedDict()
+            for record in unique_peptide_records + shared_peptide_records:
+                for form in record.modification_forms:
+                    key = (form['position'], form['canonical'])
+                    existing = forms.setdefault(key, {
+                        'position': form['position'],
+                        'canonical': form['canonical'],
+                        'names': set(),
+                        'raw_forms': set(),
+                        'sources': set(),
+                    })
+                    existing['names'].update(form['names'])
+                    existing['raw_forms'].update(form['raw_forms'])
+                    existing['sources'].update(form['sources'])
+            modification_forms = tuple(
+                {
+                    'position': form['position'],
+                    'canonical': form['canonical'],
+                    'names': tuple(sorted(form['names'])),
+                    'raw_forms': tuple(sorted(form['raw_forms'])),
+                    'sources': tuple(sorted(form['sources'])),
+                } for form in forms.values())
+            metadata = protein_metadata[accession]
+            record = _empty_protein_record(accession, metadata)
+            record.unique_peptides = len(unique_peptide_records)
+            record.shared_peptides = len(shared_peptide_records)
+            record.total_peptides = (
+                record.unique_peptides + record.shared_peptides)
+            record.unique_psms = unique_psms
+            record.shared_psms = shared_psms
+            record.total_psms = unique_psms + shared_psms
+            record.uniquely_identified = bool(unique_peptide_records)
+            record.support_type = support_type
+            record.supporting_peptides = tuple(
+                [peptide.peptide for peptide in unique_peptide_records]
+                + [peptide.peptide for peptide in shared_peptide_records])
+            record.unique_peptide_sequences = tuple(sorted(
+                peptide.sequence for peptide in unique_peptide_records))
+            record.shared_peptide_sequences = tuple(sorted(
+                peptide.sequence for peptide in shared_peptide_records))
+            record.shared_with = tuple(sorted(shared_with))
+            record.modification_forms = modification_forms
+            record.unique_flags = tuple(sorted(
+                set().union(*(set(getattr(peptide, 'unique_flags', ()))
+                              for peptide in (
+                                  unique_peptide_records + shared_peptide_records)))))
+            record.unique_flag_conflict = any(
+                peptide.unique_flag_conflict
+                for peptide in unique_peptide_records + shared_peptide_records)
+            record.sources = tuple(sorted(
+                set().union(*(entry['sources'] for entry in protein_evidence))
+                if protein_evidence else set()))
+            record.raw_psm_count = sum(
+                entry['raw_claim_count'] for entry in protein_evidence)
+            record.psm_count = len(protein_evidence)
+            if not include_unassigned and record.support_type == 'none':
+                continue
+            proteins.append(record)
+
+        evidence_records = []
+        for entry in evidence.values():
+            evidence_records.append({
+                'evidence_id': '|'.join(str(part) for part in entry['key']),
+                'evidence_key': entry['key'],
+                'peptide': entry['peptide']['key'],
+                'sequence': entry['peptide']['sequence'],
+                'modified_peptide': entry['peptide']['modified_peptide'],
+                'modifications': entry['peptide']['modifications'],
+                'raw_modifications': tuple(sorted(entry['raw_modifications'])),
+                'proteins': tuple(sorted(entry['proteins'])),
+                'spectra_ref': entry['spectra_ref'],
+                'charge': entry['charge'],
+                'exp_mass_to_charge': entry['exp_mass_to_charge'],
+                'calc_mass_to_charge': entry['calc_mass_to_charge'],
+                'retention_time': entry['retention_time'],
+                'psm_ids': tuple(sorted(entry['psm_ids'])),
+                'sources': tuple(sorted(entry['sources'])),
+                'raw_claim_count': entry['raw_claim_count'],
+                'unique_flags': tuple(sorted(entry.get('unique_flags') or ())),
+                'decoy': (None if not entry['decoy']
+                          else tuple(sorted(entry['decoy']))),
+            })
+
+        return ProteinSupportReport(
+            proteins, peptides, links, evidence_records, source_order)
+    finally:
+        for mz_tab in opened:
+            try:
+                mz_tab.file.close()
+            except Exception:
+                pass
+
+
+protein_support_report = protein_support
+summarize_protein_support = protein_support
+
+
 @add_metaclass(MetadataPropertyAnnotator)
 class MzTab(_MzTabParserBase):
     """Parser for mzTab format files.
@@ -772,6 +2053,19 @@ class MzTab(_MzTabParserBase):
         while len(self.num_version) < 3:
             self.num_version.append(0)
         self.variant = variant
+
+    def protein_support(self, **kwargs):
+        """Summarize protein support from the parsed tables.
+
+        This is a convenience wrapper around :func:`protein_support` using
+        this already parsed instance.  See :func:`protein_support` for the
+        available options.
+
+        Returns
+        -------
+        ProteinSupportReport
+        """
+        return protein_support(self, **kwargs)
 
     def keys(self):
         return OrderedDict(list(self)).keys()

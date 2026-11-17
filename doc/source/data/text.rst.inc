@@ -319,3 +319,22 @@ class.
   >>> tables = mztab.MzTab("path/to/file.mzTab")
   >>> psms = tables.spectrum_match_table
   >>> # do something with DataFrame
+
+Protein support can be summarized with :py:func:`pyteomics.mztab.protein_support`
+(or :py:meth:`pyteomics.mztab.MzTab.protein_support`). The report preserves the
+many-to-many peptide-to-protein mapping and distinguishes unique from shared
+support. Peptides are unique for a protein only when all their observed links
+point to that protein; proteins supported only by shared peptides are not
+reported as uniquely identified.
+
+.. code-block:: python
+
+  >>> report = mztab.protein_support("path/to/file.mzTab")
+  >>> report["P12345"].unique_peptides, report["P12345"].shared_peptides
+  >>> report.protein_table
+  >>> report.peptide_protein_table
+
+Equivalent textual modifications are merged into canonical forms, while the
+original forms and their source files are retained in ``modification_forms``.
+Repeated exports of the same spectra are counted as one piece of evidence by
+default (``deduplicate='auto'``).
