@@ -138,6 +138,42 @@ meshio.write_points_cells("foo.vtk", points, cells)
 For both input and output, you can optionally specify the exact `file_format`
 (in case you would like to enforce ASCII over binary VTK, for example).
 
+#### Conservative cell-data transfer
+
+Cell fields can be transferred between two meshes that share the same coordinate
+system. Only the linear cell types approved by the caller are used, and
+overlaps are computed from the actual cell geometry.
+
+<!--pytest-codeblocks:skip-->
+
+```python
+result = meshio.transfer_cell_data(
+    source,
+    target,
+    cell_types=["triangle", "quad", "tetra", "hexahedron"],
+    extensive=["mass"],       # cell totals
+    intensive=["temperature"],  # cell averages
+    weights={"temperature": 1.0},  # weight per source cell (scalar/array)
+)
+
+# Target cell data, shaped like `target.cell_data`.
+target.cell_data.update(result.cell_data)
+
+# Conservation diagnostics for extensive fields: for every source cell,
+# allocated + unallocated == source value.
+result.allocated["mass"]
+result.unallocated["mass"]
+
+# Target coverage is reported separately, never normalized away.
+result.target_coverage        # per-block covered volume fraction
+result.uncovered_targets      # cells with no overlap at all
+result.partially_covered_targets
+```
+
+Extensive values are split by `|S_i intersect T_j| / |S_i|`. Intensive values
+use a weighted average with the same overlap measure, so target cells with no
+overlap get `nan` rather than a fabricated value.
+
 #### Time series
 
 The [XDMF format](https://xdmf.org/index.php/XDMF_Model_and_Format) supports

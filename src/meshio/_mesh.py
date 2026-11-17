@@ -234,6 +234,22 @@ class Mesh:
     def copy(self):
         return copy.deepcopy(self)
 
+    def transfer_cell_data(self, target, **kwargs):
+        """Conservatively transfer this mesh's cell data onto ``target``."""
+        from ._transfer import transfer_cell_data
+
+        return transfer_cell_data(self, target, **kwargs)
+
+    def cell_overlaps(self, target, **kwargs):
+        """Intersection measures between this mesh's cells and ``target``."""
+        from ._transfer import cell_overlaps
+
+        return cell_overlaps(self, target, **kwargs)
+
+    def transfer_cell_data_to(self, target, **kwargs):
+        """Conservatively transfer this mesh's cell data onto ``target``."""
+        return self.transfer_cell_data(target, **kwargs)
+
     def write(self, path_or_buf, file_format: str | None = None, **kwargs):
         # avoid circular import
         from ._helpers import write

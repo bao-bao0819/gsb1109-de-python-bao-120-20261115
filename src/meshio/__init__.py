@@ -25,6 +25,7 @@ from . import (
     svg,
     tecplot,
     tetgen,
+    transfer,
     ugrid,
     vtk,
     vtu,
@@ -42,6 +43,18 @@ from ._helpers import (
     write_points_cells,
 )
 from ._mesh import CellBlock, Mesh
+from ._transfer import (
+    CellOverlap,
+    CellTransferResult,
+    cell_overlaps,
+    conservative_transfer,
+    map_cell_data,
+    overlap_volumes,
+    remap_cell_data,
+    transfer_cell_data,
+    transfer_cell_field,
+    transfer_cell_fields,
+)
 
 __all__ = [
     "abaqus",
@@ -69,6 +82,7 @@ __all__ = [
     "svg",
     "tecplot",
     "tetgen",
+    "transfer",
     "ugrid",
     "vtk",
     "vtu",
@@ -83,6 +97,16 @@ __all__ = [
     "extension_to_filetypes",
     "Mesh",
     "CellBlock",
+    "CellOverlap",
+    "CellTransferResult",
+    "cell_overlaps",
+    "conservative_transfer",
+    "map_cell_data",
+    "overlap_volumes",
+    "remap_cell_data",
+    "transfer_cell_data",
+    "transfer_cell_field",
+    "transfer_cell_fields",
     "ReadError",
     "WriteError",
     "topological_dimension",
