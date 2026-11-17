@@ -138,6 +138,25 @@ meshio.write_points_cells("foo.vtk", points, cells)
 For both input and output, you can optionally specify the exact `file_format`
 (in case you would like to enforce ASCII over binary VTK, for example).
 
+#### Merging cell blocks
+
+Some formats store several element blocks of the same cell type. You can merge them
+into one block per type while keeping the original block and row layout:
+
+```python
+mapping = mesh.merge_cell_blocks()
+# mapping.block_map:  merged block -> original block indices
+# mapping.row_map:    merged row -> (original block, original row)
+
+mesh.split_cell_blocks()   # restore the original blocks, data, and sets
+```
+
+`cell_data` and `cell_sets` are migrated together with the cells. If an attribute is
+not defined on one of the original blocks, its rows are marked missing (`NaN` for
+floating-point data, a mask otherwise); they are never filled with real zeros.
+Splitting restores those blocks as `None` and maps every cell-data row back to its
+original row.
+
 #### Time series
 
 The [XDMF format](https://xdmf.org/index.php/XDMF_Model_and_Format) supports

@@ -41,7 +41,13 @@ from ._helpers import (
     write,
     write_points_cells,
 )
-from ._mesh import CellBlock, Mesh
+from ._mesh import (
+    CellBlock,
+    CellBlockMapping,
+    Mesh,
+    merge_cell_blocks,
+    split_cell_blocks,
+)
 
 __all__ = [
     "abaqus",
@@ -83,6 +89,9 @@ __all__ = [
     "extension_to_filetypes",
     "Mesh",
     "CellBlock",
+    "CellBlockMapping",
+    "merge_cell_blocks",
+    "split_cell_blocks",
     "ReadError",
     "WriteError",
     "topological_dimension",
