@@ -82,6 +82,29 @@ meshio ascii      input.msh              # convert to ASCII format
 
 with any of the supported formats.
 
+`meshio convert` checks the concrete mesh before writing. It lists what can be
+preserved, what would be explicitly degraded, and what cannot be represented,
+with the affected cell blocks and data arrays. Writing stops when a degradation
+is not authorized; `--allow-degraded` authorizes only the listed degradations,
+never unrepresentable features.
+
+```sh
+meshio convert input.msh output.stl --report          # preflight only
+meshio convert input.msh output.stl --json            # machine-readable report
+meshio convert input.msh output.stl --allow-degraded  # accept listed losses
+```
+
+In Python, the same check is available before writing:
+
+```python
+import meshio
+
+report = meshio.capability_report(mesh, "stl")
+print(report.describe())
+
+meshio.write_with_preflight("out.stl", mesh, allow_degraded=True)
+```
+
 In Python, simply do
 
 <!--pytest-codeblocks:skip-->

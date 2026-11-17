@@ -32,6 +32,14 @@ from . import (
     xdmf,
 )
 from .__about__ import __version__
+from ._capabilities import (
+    CapabilityReport,
+    FeatureResult,
+    capability_report,
+    report_to_dict,
+    require_writable,
+    write_with_preflight,
+)
 from ._exceptions import ReadError, WriteError
 from ._helpers import (
     deregister_format,
@@ -80,6 +88,12 @@ __all__ = [
     "register_format",
     "deregister_format",
     "write_points_cells",
+    "write_with_preflight",
+    "capability_report",
+    "report_to_dict",
+    "require_writable",
+    "CapabilityReport",
+    "FeatureResult",
     "extension_to_filetypes",
     "Mesh",
     "CellBlock",
