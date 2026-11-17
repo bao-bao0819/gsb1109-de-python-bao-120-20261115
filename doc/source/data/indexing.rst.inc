@@ -118,6 +118,39 @@ RT lookup is performed using binary search.
 When retrieving ranges, the closest spectra to the start and end of the range
 are used as endpoints, so it is possible that they are slightly outside the range.
 
+Saved byte offset indexes
+-------------------------
+
+The index of an XML or text parser can be built ahead of time and saved next to
+the source file with :py:meth:`pyteomics.mzml.MzML.prebuild_byte_offset_file` or
+:py:meth:`pyteomics.mgf.IndexedMGF.write_byte_offsets`. It is then loaded
+automatically by any parser that supports index saving (mzML, mzXML, pepXML,
+mzIdentML, TraML, MGF).
+
+A saved index is only used if it is applicable to the source file and to the
+parser. Each index records its schema version, the offset convention used to
+interpret the stored numbers, the parser parameters affecting the index
+(indexed tags, record labels) and a fingerprint of the source file (size,
+modification time and content digest). If the file was recompressed or edited,
+or the index was produced by an incompatible version or configuration, the
+index is rebuilt and the saved copy is replaced. An unreadable or corrupt index
+file is treated the same way. This avoids silently using offsets that point
+into the middle of an unrelated record.
+
+Saved indexes are written atomically: the new index is written to a temporary
+file in the same directory and moved into place in one step. If index
+construction or writing is interrupted, the previous index is left untouched
+and no partially written index is published.
+
+.. note::
+   IDs used as index keys should be unique. If several records share an ID, a
+   :py:class:`pyteomics.auxiliary.DuplicateIDWarning` is emitted whose message
+   lists every conflicting ID together with all of its positions, and the index
+   keeps the complete conflict table in its ``duplicates`` attribute.
+   ``parser.get_all_by_id(some_id)`` returns the records at all of those
+   positions, so no occurrence is silently dropped; ordinary lookup returns the
+   first one.
+
 Parallel processing
 -------------------
 

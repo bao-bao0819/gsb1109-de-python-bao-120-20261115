@@ -86,6 +86,7 @@ import re
 import warnings
 import numpy as np
 from . import xml, auxiliary as aux, _schema_defaults
+from .auxiliary.file_helpers import _warn_duplicates
 from .xml import etree
 
 NON_STANDARD_DATA_ARRAY = 'non-standard data array'
@@ -506,21 +507,32 @@ class PreIndexedMzML(MzML):
     def _iterparse_index_list(self, offset):
         index_map = xml.HierarchicalOffsetIndex()
         index = index_map._inner_type()
+        index_name = None
+        conflicts = {}
         self._source.seek(offset)
         try:
             for event, elem in etree.iterparse(self._source, events=('start', 'end'), remove_comments=True):
                 if event == 'start':
                     if elem.tag == 'index':
                         index = index_map._inner_type()
-                        index_map[elem.attrib['name']] = index
+                        index_name = elem.attrib['name']
+                        index_map[index_name] = index
                 else:
                     if elem.tag == 'offset':
-                        index[elem.attrib['idRef']] = int(elem.text)
+                        key = elem.attrib['idRef']
+                        value = int(elem.text)
+                        if key in index:
+                            conflicts.setdefault(index_name, {}).setdefault(
+                                key, [index[key]]).append(value)
+                        else:
+                            index[key] = value
                     elem.clear()
         except etree.XMLSyntaxError:
             # The iteration has reached the end of the indexList tag and the parser
             # encounters the later elements in the document.
             pass
+        if conflicts:
+            _warn_duplicates(conflicts, stacklevel=4)
         return index_map
 
     @xml._keepstate

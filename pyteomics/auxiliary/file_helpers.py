@@ -1,6 +1,7 @@
 import sys
 import codecs
 import re
+import hashlib
 from functools import wraps
 from contextlib import contextmanager
 from collections import OrderedDict, defaultdict
@@ -8,6 +9,7 @@ import json
 import multiprocessing as mp
 import threading
 import queue
+import tempfile
 from copy import copy
 import warnings
 import os
@@ -144,6 +146,16 @@ class NoOpBaseReader(object):
     def __init__(self, *args, **kwargs):
         pass
 
+    @property
+    def _source_path(self):
+        try:
+            path = self._source.name
+        except AttributeError:
+            return None
+        if isinstance(path, (str, bytes, os.PathLike)):
+            return path
+        return None
+
 
 class IteratorContextManager(NoOpBaseReader):
     def __init__(self, *args, **kwargs):
@@ -230,6 +242,10 @@ def remove_bom(bstr):
 
 class IndexedReaderMixin(NoOpBaseReader):
     """Common interface for :py:class:`IndexedTextReader` and :py:class:`IndexedXML`."""
+    #: Identifies how byte offsets are interpreted by this reader. Cached
+    #: indexes built with a different convention must not be reused.
+    _offset_convention = None
+
     @property
     def index(self):
         return self._offset_index
@@ -237,6 +253,86 @@ class IndexedReaderMixin(NoOpBaseReader):
     @property
     def default_index(self):
         return self._offset_index
+
+    def _index_parameters(self):
+        """Return the parser parameters that affect the index contents.
+
+        A cached index is only applicable if it was built with the same
+        parameters, e.g. the same indexed tags or the same record label.
+        """
+        return {}
+
+    def _source_fingerprint(self):
+        """Return a fingerprint of the source file used to detect stale indexes.
+
+        The fingerprint contains the file size, modification time and a
+        SHA-256 digest of the contents. It changes whenever the file is
+        rewritten, recompressed or has metadata inserted, so an index built
+        for another revision of the source is never applied.
+        """
+        path = self._source_path
+        if path is None:
+            return None
+        try:
+            stat = os.stat(path)
+            with open(path, 'rb') as f:
+                digest = hashlib.sha256()
+                while True:
+                    block = f.read(1024 * 1024)
+                    if not block:
+                        break
+                    digest.update(block)
+        except (OSError, IOError):
+            return None
+        return {
+            'size': stat.st_size,
+            'mtime_ns': getattr(stat, 'st_mtime_ns', int(stat.st_mtime * 1e9)),
+            'sha256': digest.hexdigest(),
+        }
+
+    def _index_is_stale(self, index):
+        """Check if a cached index still describes the current source file.
+
+        Unchanged size and modification time are accepted without reading the
+        file. If either differs, the contents are hashed so that changes which
+        preserve the size (e.g. recompression) are still detected, while
+        metadata-only timestamps do not force an unnecessary rebuild.
+        """
+        recorded = index.source
+        if not isinstance(recorded, dict):
+            return True
+        path = self._source_path
+        if path is None:
+            return True
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return True
+        if recorded.get('size') != stat.st_size:
+            return True
+        mtime_ns = getattr(stat, 'st_mtime_ns', int(stat.st_mtime * 1e9))
+        if recorded.get('mtime_ns') == mtime_ns:
+            return False
+        recorded_digest = recorded.get('sha256')
+        if recorded_digest is None:
+            return True
+        current = self._source_fingerprint()
+        if current is None:
+            return True
+        return recorded_digest != current.get('sha256')
+
+    def _stamp_index(self, index):
+        """Attach applicability metadata to an index before it is saved.
+
+        Only called on the write path: the source fingerprint requires reading
+        the whole file, which should not slow down plain index construction.
+        """
+        if index is None:
+            return index
+        index.offset_convention = self._offset_convention
+        index.parameters = self._index_parameters()
+        index.source = self._source_fingerprint()
+        return index
 
     def __len__(self):
         return len(self._offset_index)
@@ -256,6 +352,25 @@ class IndexedReaderMixin(NoOpBaseReader):
 
     def get_by_ids(self, ids):
         return [self.get_by_id(key) for key in ids]
+
+    def get_all_by_id(self, elem_id):
+        """Retrieve every record sharing the given ID.
+
+        Repeated IDs are recorded in the index's ``duplicates`` attribute.
+        This method returns the record at each of those positions instead of
+        only the first one. For unique IDs the result is a one-element list.
+        """
+        index = self.default_index
+        if index is None:
+            raise PyteomicsError('Access by ID requires building an offset index.')
+        duplicates = getattr(index, 'duplicates', None) or {}
+        offsets = duplicates.get(elem_id) if isinstance(duplicates, dict) else None
+        if offsets:
+            return [self._item_from_offsets(offset) for offset in offsets]
+        return [self.get_by_id(elem_id)]
+
+    def get_all_by_ids(self, ids):
+        return [item for key in ids for item in self.get_all_by_id(key)]
 
     def get_by_index(self, i):
         try:
@@ -397,6 +512,8 @@ class IndexedTextReader(IndexedReaderMixin, FileReader):
     label_group = 1
     _kw_keys = ['delimiter', 'label', 'block_size', 'label_group']
     _warn_if_empty = True
+    #: Text offsets point at the first byte of a record, i.e. the label line.
+    _offset_convention = 'record-start'
 
     def __init__(self, source, **kwargs):
         # the underlying _file_obj gets None as encoding
@@ -478,15 +595,32 @@ class IndexedTextReader(IndexedReaderMixin, FileReader):
         g = self._generate_offsets()
         last_offset = 0
         last_label = None
+        conflicts = {}
         for offset, label, keyline in g:
             if last_label is not None:
-                index[last_label.strip()] = (last_offset, offset)
+                key = last_label.strip()
+                span = (last_offset, offset)
+                if key in index:
+                    conflicts.setdefault(key, [index[key]]).append(span)
+                else:
+                    index[key] = span
             last_label = label
             last_offset = offset
         assert last_label is None
+        index.duplicates = conflicts
+        if conflicts:
+            _warn_duplicates(conflicts, stacklevel=3)
         if self._warn_if_empty and not index:
             self._warn_empty()
         return index
+
+    def _index_parameters(self):
+        return {
+            'delimiter': self.delimiter,
+            'label': self.label,
+            'label_group': self.label_group,
+            'encoding': str(getattr(self, 'encoding', '') or ''),
+        }
 
     def _read_lines_from_offsets(self, start, end):
         self._source.seek(start)
@@ -504,9 +638,8 @@ class IndexSavingMixin(NoOpBaseReader):
 
     @property
     def _byte_offset_filename(self):
-        try:
-            path = self._source.name
-        except AttributeError:
+        path = self._source_path
+        if path is None:
             return None
         name, ext = os.path.splitext(path)
         byte_offset_filename = '{}-{}-byte-offsets.json'.format(name, ext[1:])
@@ -525,6 +658,25 @@ class IndexSavingMixin(NoOpBaseReader):
             return False
         return os.path.exists(path)
 
+    def _validate_index(self, index):
+        """Check that a cached index can be applied to the current source."""
+        expected_version = tuple(self._index_class.schema_version)
+        if tuple(index.schema_version or ()) != expected_version:
+            raise TypeError(
+                'Inapplicable offset index schema version: {!r} (expected {!r})'.format(
+                    index.schema_version, expected_version))
+        if index.offset_convention != self._offset_convention:
+            raise TypeError(
+                'Inapplicable offset index convention: {!r} (expected {!r})'.format(
+                    index.offset_convention, self._offset_convention))
+        if index.parameters != self._index_parameters():
+            raise TypeError('Offset index was built with different parser parameters')
+        if self._index_is_stale(index):
+            raise TypeError('Offset index does not match the current source file')
+        if index.duplicates:
+            _warn_duplicates(index.duplicates)
+        return index
+
     @classmethod
     def prebuild_byte_offset_file(cls, path):
         """Construct a new XML reader, build its byte offset index and
@@ -540,10 +692,56 @@ class IndexSavingMixin(NoOpBaseReader):
 
     def write_byte_offsets(self):
         """Write the byte offsets in :attr:`_offset_index` to the file
-        at :attr:`_byte_offset_filename`
+        at :attr:`_byte_offset_filename`.
+
+        The index is written to a temporary file in the target directory and
+        atomically moved into place. If index construction or writing is
+        interrupted, the previous index (if any) is left untouched and no
+        partially written index is published.
         """
-        with open(self._byte_offset_filename, 'w') as f:
-            self._offset_index.save(f)
+        index = self._offset_index
+        if index is None:
+            raise PyteomicsError('Cannot save an empty offset index')
+        self._write_index_file(index)
+
+    def _write_index_file(self, index):
+        """Atomically write `index` to :attr:`_byte_offset_filename`."""
+        path = self._byte_offset_filename
+        if path is None:
+            raise PyteomicsError('Cannot save an offset index for a source without a file name')
+        self._stamp_index(index)
+        index.schema_version = tuple(self._index_class.schema_version)
+        index.duplicates = getattr(index, 'duplicates', None) or {}
+
+        directory = os.path.dirname(os.path.abspath(path))
+        prefix = '.{}-'.format(os.path.basename(path))
+        fd, tmp_path = tempfile.mkstemp(prefix=prefix, suffix='.tmp', dir=directory)
+        try:
+            with os.fdopen(fd, 'w') as f:
+                index.save(f)
+                f.flush()
+                os.fsync(f.fileno())
+            try:
+                mode = os.stat(path).st_mode & 0o777
+            except OSError:
+                mode = 0o644
+            os.chmod(tmp_path, mode)
+            os.replace(tmp_path, path)
+            try:
+                dir_fd = os.open(directory, os.O_RDONLY)
+            except OSError:
+                pass
+            else:
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     @_keepstate_method
     def build_byte_index(self):
@@ -555,15 +753,32 @@ class IndexSavingMixin(NoOpBaseReader):
         if not getattr(self, '_use_index', True): return  # indexed text readers do not have `_use_index`
         try:
             return self._read_byte_offsets()
-        except (IOError, AttributeError, TypeError):
+        except (IOError, OSError):
+            # The index file is missing or unreadable: build a fresh index.
             return super(IndexSavingMixin, self).build_byte_index()
+        except (AttributeError, TypeError, ValueError):
+            # The index file exists but is not applicable to this source or
+            # to this parser (incompatible version, offset convention or
+            # parser parameters, or the source has changed since it was
+            # built). Rebuild it and refresh the cached copy if one exists.
+            had_index_file = self._check_has_byte_offset_file()
+            index = super(IndexSavingMixin, self).build_byte_index()
+            if had_index_file and index is not None:
+                try:
+                    self._write_index_file(index)
+                except (OSError, IOError):
+                    # Refreshing the cache is best effort; read-only media and
+                    # concurrent writers must not prevent parsing.
+                    pass
+            return index
 
     def _read_byte_offsets(self):
         """Read the byte offset index JSON file at :attr:`_byte_offset_filename`
         and populate :attr:`_offset_index`
         """
         with open(self._byte_offset_filename, 'r') as f:
-            return self._index_class.load(f)
+            index = self._index_class.load(f)
+        return self._validate_index(index)
 
 
 def _file_reader(_mode='r'):
@@ -612,8 +827,19 @@ def _file_writer(_mode='w'):
 
 
 class WritableIndex(object):
-    schema_version = (1, 0, 0)
+    schema_version = (2, 0, 0)
     _schema_version_tag_key = "@pyteomics_schema_version"
+    _offset_convention_tag_key = "@pyteomics_offset_convention"
+    _parameters_tag_key = "@pyteomics_index_parameters"
+    _source_tag_key = "@pyteomics_source"
+    _duplicates_tag_key = "@pyteomics_duplicate_ids"
+
+    def _init_metadata(self):
+        self.schema_version = type(self).schema_version
+        self.offset_convention = None
+        self.parameters = {}
+        self.source = None
+        self.duplicates = {}
 
     def _serializable_container(self):
         container = {'index': list(self.items())}
@@ -622,6 +848,10 @@ class WritableIndex(object):
     def save(self, fp):
         container = self._serializable_container()
         container[self._schema_version_tag_key] = self.schema_version
+        container[self._offset_convention_tag_key] = self.offset_convention
+        container[self._parameters_tag_key] = self.parameters
+        container[self._source_tag_key] = self.source
+        container[self._duplicates_tag_key] = self.duplicates
         json.dump(container, fp)
 
     @classmethod
@@ -633,15 +863,55 @@ class WritableIndex(object):
             inst = cls()
             inst.schema_version = None
             return inst
-        version_tag = tuple(version_tag)
-        index = container.get("index")
-        if version_tag < cls.schema_version:
-            # schema upgrade case, no special processing yet
-            inst = cls(index)
+        try:
+            version_tag = tuple(version_tag)
+        except TypeError:
+            inst = cls()
             inst.schema_version = version_tag
             return inst
-        # no need to upgrade
-        return cls(index)
+        index = container.get("index")
+        inst = cls(index) if index is not None else cls()
+        inst.schema_version = version_tag
+        inst.offset_convention = container.get(cls._offset_convention_tag_key)
+        inst.parameters = container.get(cls._parameters_tag_key) or {}
+        inst.source = container.get(cls._source_tag_key)
+        inst.duplicates = container.get(cls._duplicates_tag_key) or {}
+        return inst
+
+def _describe_duplicates(conflicts):
+    """Return a human-readable listing of conflicting record IDs."""
+    lines = []
+    for element_type in sorted(conflicts, key=str):
+        records = conflicts[element_type]
+        if isinstance(records, dict):
+            for key in sorted(records, key=str):
+                offsets = records[key]
+                lines.append('{!r} ({}) at {}'.format(
+                    key, element_type, ', '.join(str(offset) for offset in offsets)))
+        else:
+            offsets = records
+            lines.append('{!r} at {}'.format(
+                element_type, ', '.join(str(offset) for offset in offsets)))
+    return '; '.join(lines)
+
+
+class DuplicateIDWarning(UserWarning):
+    """Warn about records sharing the same identifier.
+
+    The message lists every conflicting identifier together with all of its
+    positions. The complete mapping is stored on the index as its
+    ``duplicates`` attribute, so no occurrence is silently discarded.
+    """
+
+
+def _warn_duplicates(conflicts, stacklevel=3):
+    warnings.warn(
+        'Duplicate record IDs found while building the offset index: {}. '
+        'All positions are recorded in the index `duplicates` attribute; '
+        'lookup returns the first occurrence.'.format(
+            _describe_duplicates(conflicts)),
+        DuplicateIDWarning, stacklevel=stacklevel)
+    return conflicts
 
 
 class OffsetIndex(OrderedDict, WritableIndex):
@@ -651,6 +921,7 @@ class OffsetIndex(OrderedDict, WritableIndex):
     def __init__(self, *args, **kwargs):
         super(OffsetIndex, self).__init__(*args, **kwargs)
         self._index_sequence = None
+        self._init_metadata()
 
     def _invalidate(self):
         self._index_sequence = None
@@ -779,6 +1050,7 @@ class HierarchicalOffsetIndex(WritableIndex):
         self.mapping = defaultdict(self._inner_type)
         for key, value in (base or {}).items():
             self.mapping[key] = self._inner_type(value)
+        self._init_metadata()
 
     def _integrity_check(self):
         for key, value in self.items():

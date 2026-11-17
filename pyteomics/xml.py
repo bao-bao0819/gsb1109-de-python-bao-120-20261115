@@ -43,6 +43,7 @@ from .auxiliary import FileReader, PyteomicsError, _file_obj, HierarchicalOffset
 from .auxiliary import unitint, unitfloat, unitstr, cvstr
 from .auxiliary import _keepstate_method as _keepstate
 from .auxiliary import TaskMappingMixin, IndexedReaderMixin, IndexSavingMixin
+from .auxiliary.file_helpers import _warn_duplicates
 from .auxiliary.psims_util import load_psims, HasValueTypeRelationship, _has_psims
 
 
@@ -864,6 +865,8 @@ class ByteCountingXMLScanner(_file_obj):
     Inheris from :py:class:`pyteomics.auxiliary._file_obj` to support the object-oriented
     :py:func:`_keep_state` interface.
     """
+    #: Offsets point at the very first byte of the opening tag of an indexed element.
+    offset_convention = 'opening-tag-start'
     entities = {
         'quot': '"',
         'amp': '&',
@@ -991,8 +994,12 @@ class ByteCountingXMLScanner(_file_obj):
 
         Returns
         -------
-        defaultdict(dict)
-            Mapping from tag type to dict from identifier to byte offset
+        HierarchicalOffsetIndex
+            Mapping from tag type to a mapping from identifier to byte offset.
+            Conflicting (repeated) identifiers are collected in
+            :attr:`HierarchicalOffsetIndex.duplicates`, and a
+            :py:class:`DuplicateIDWarning` is emitted listing every
+            conflicting identifier and all of its positions.
         """
         if lookup_id_key_mapping is None:
             lookup_id_key_mapping = {}
@@ -1005,12 +1012,22 @@ class ByteCountingXMLScanner(_file_obj):
             lookup_id_key_mapping[bname] = ensure_bytes_single(lookup_id_key_mapping[bname])
 
         indices = HierarchicalOffsetIndex()
+        conflicts = {}
         g = self._generate_offsets()
         for offset, offset_type, attrs in g:
             k = attrs[lookup_id_key_mapping[offset_type]].decode('utf-8')
             if '&' in k:
                 k = self.replace_entities(k)
-            indices[offset_type.decode('utf-8')][k] = offset
+            element_type = offset_type.decode('utf-8')
+            element_index = indices[element_type]
+            if k in element_index:
+                conflicts.setdefault(element_type, {}).setdefault(
+                    k, [element_index[k]]).append(offset)
+                continue
+            element_index[k] = offset
+        indices.duplicates = conflicts
+        if conflicts:
+            _warn_duplicates(conflicts, stacklevel=4)
         return indices
 
     @classmethod
@@ -1261,6 +1278,50 @@ class IndexedXML(IndexedReaderMixin, XML):
         data = self._get_info_smart(elem, **kwargs)
         return data
 
+    @_keepstate
+    def get_all_by_id(self, elem_id, id_key=None, element_type=None, **kwargs):
+        """Retrieve every element sharing the given ID.
+
+        Repeated IDs are recorded in the index's ``duplicates`` attribute.
+        This method returns an element for each recorded position instead of
+        only the first one. For unique IDs the result is a one-element list.
+        """
+        index = self._offset_index
+        if index is None:
+            raise PyteomicsError('Access by ID requires building an offset index.')
+        duplicates = getattr(index, 'duplicates', None) or {}
+        positions = []
+        if element_type is not None:
+            group = duplicates.get(element_type) or {}
+            positions.extend((offset, element_type) for offset in group.get(elem_id, []))
+        else:
+            for group_type, group in duplicates.items():
+                positions.extend(
+                    (offset, group_type) for offset in group.get(elem_id, []))
+        if not positions:
+            return [self.get_by_id(elem_id, id_key=id_key,
+                                   element_type=element_type, **kwargs)]
+        results = []
+        for offset, group_type in positions:
+            elem = self._element_at_offset(offset)
+            results.append(self._get_info_smart(elem, **kwargs))
+        return results
+
+    def _element_at_offset(self, offset):
+        """Parse the single element whose opening tag starts at `offset`."""
+        self._source.seek(offset)
+        depth = 0
+        for event, elem in etree.iterparse(
+                self._source, events=('start', 'end'), remove_comments=True,
+                huge_tree=self._huge_tree):
+            if event == 'start':
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    return elem
+        raise PyteomicsError('No element found at offset {}'.format(offset))
+
     def __contains__(self, key):
         return key in self._offset_index[self._default_iter_tag]
 
@@ -1315,16 +1376,18 @@ class IndexSavingXML(IndexSavingMixin, IndexedXML):
     index externally.
     """
     _index_class = HierarchicalOffsetIndex
+    _offset_convention = ByteCountingXMLScanner.offset_convention
 
-    def _read_byte_offsets(self):
-        """Read the byte offset index JSON file at :attr:`_byte_offset_filename`
-        and populate :attr:`_offset_index`
-        """
-        with open(self._byte_offset_filename, 'r') as f:
-            index = self._index_class.load(f)
-            if index.schema_version is None:
-                raise TypeError("Legacy Offset Index!")
-            return index
+    def _index_parameters(self):
+        version_info = getattr(self, 'version_info', None)
+        if version_info is not None:
+            version_info = [str(value) if value is not None else None for value in version_info]
+        return {
+            'file_format': self.file_format,
+            'source_version': version_info,
+            'indexed_tags': sorted(ensure_bytes_single(tag).decode('utf-8') for tag in self._indexed_tags),
+            'indexed_tag_keys': {str(k): str(v) for k, v in (self._indexed_tag_keys or {}).items()},
+        }
 
 
 class Iterfind(object):

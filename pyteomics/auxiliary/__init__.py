@@ -10,6 +10,7 @@ from .file_helpers import (
     _file_obj, _keepstate, _keepstate_method, IteratorContextManager,
     FileReader, IndexedTextReader, IndexedReaderMixin, TimeOrderedIndexedReaderMixin,
     IndexSavingMixin, OffsetIndex, HierarchicalOffsetIndex, IndexSavingTextReader,
+    DuplicateIDWarning, _warn_duplicates,
     _file_reader, _file_writer,
     _make_chain, _check_use_index, FileReadingProcess, TaskMappingMixin, set_start_method,
     serializer, ChainBase, TableJoiner)

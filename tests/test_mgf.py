@@ -254,9 +254,141 @@ class MGFTest(unittest.TestCase):
         with open(ipath) as ifp:
             container = json.load(ifp, object_hook=OrderedDict)
         tag_key = mgf.IndexedMGF._index_class._schema_version_tag_key
-        self.assertEqual(set(container.keys()), {tag_key, 'index'})
+        index_class = mgf.IndexedMGF._index_class
+        self.assertEqual(set(container.keys()), {
+            tag_key, 'index',
+            index_class._offset_convention_tag_key,
+            index_class._parameters_tag_key,
+            index_class._source_tag_key,
+            index_class._duplicates_tag_key})
         self.assertEqual(tuple(container[tag_key]), mgf.IndexedMGF._index_class.schema_version)
         self.assertEqual(container['index'], [['Spectrum 1', [217, 343]], ['Spectrum 2', [343, 504]]])
+
+    def _prebuilt_copy(self, test_dir):
+        work_path = os.path.join(test_dir, self.path)
+        with open(work_path, 'wb') as dest, open(self.path, 'rb') as source:
+            dest.write(source.read())
+        mgf.IndexedMGF.prebuild_byte_offset_file(work_path)
+        with mgf.IndexedMGF(work_path) as inst:
+            ipath = inst._byte_offset_filename
+        return work_path, ipath
+
+    def test_stale_index_rebuilt_after_source_change(self):
+        test_dir = tempfile.mkdtemp()
+        try:
+            work_path, ipath = self._prebuilt_copy(test_dir)
+            data = open(work_path, 'rb').read()
+            assert b'Spectrum 1' in data
+            # Same size, different content: only a content-aware check catches it.
+            with open(work_path, 'wb') as f:
+                f.write(data.replace(b'Spectrum 1', b'Spectrum X'))
+            with mgf.IndexedMGF(work_path) as inst:
+                self.assertEqual(list(inst.index), ['Spectrum X', 'Spectrum 2'])
+            with open(ipath) as fh:
+                container = json.load(fh)
+            self.assertEqual(container['@pyteomics_source']['size'], len(data))
+            self.assertEqual(container['@pyteomics_schema_version'],
+                             list(mgf.IndexedMGF._index_class.schema_version))
+        finally:
+            shutil.rmtree(test_dir, True)
+
+    def test_inapplicable_version_and_convention_rebuilt(self):
+        test_dir = tempfile.mkdtemp()
+        try:
+            work_path, ipath = self._prebuilt_copy(test_dir)
+            for tag, value in [
+                    ('@pyteomics_schema_version', [1, 0, 0]),
+                    ('@pyteomics_offset_convention', 'something-else')]:
+                with open(ipath) as fh:
+                    container = json.load(fh)
+                container[tag] = value
+                with open(ipath, 'w') as fh:
+                    json.dump(container, fh)
+                with mgf.IndexedMGF(work_path) as inst:
+                    self.assertEqual(list(inst.index), ['Spectrum 1', 'Spectrum 2'])
+                with open(ipath) as fh:
+                    container = json.load(fh)
+                self.assertEqual(container['@pyteomics_schema_version'],
+                                 list(mgf.IndexedMGF._index_class.schema_version))
+                self.assertEqual(container['@pyteomics_offset_convention'],
+                                 mgf.IndexedMGF._offset_convention)
+        finally:
+            shutil.rmtree(test_dir, True)
+
+    def test_corrupt_index_rebuilt(self):
+        test_dir = tempfile.mkdtemp()
+        try:
+            work_path, ipath = self._prebuilt_copy(test_dir)
+            with open(ipath, 'w') as fh:
+                fh.write('{"index": [')
+            with mgf.IndexedMGF(work_path) as inst:
+                self.assertEqual(list(inst.index), ['Spectrum 1', 'Spectrum 2'])
+        finally:
+            shutil.rmtree(test_dir, True)
+
+    def test_interrupted_write_keeps_previous_index(self):
+        test_dir = tempfile.mkdtemp()
+        try:
+            work_path, ipath = self._prebuilt_copy(test_dir)
+            with open(ipath) as fh:
+                before = fh.read()
+
+            inst = mgf.IndexedMGF(work_path)
+            index_class = type(inst._offset_index)
+
+            def fail(*args, **kwargs):
+                raise KeyboardInterrupt()
+
+            original = index_class.save
+            index_class.save = fail
+            try:
+                self.assertRaises(KeyboardInterrupt, inst.write_byte_offsets)
+            finally:
+                index_class.save = original
+                inst.close()
+
+            with open(ipath) as fh:
+                self.assertEqual(fh.read(), before)
+            leftovers = [name for name in os.listdir(test_dir) if name.endswith('.tmp')]
+            self.assertEqual(leftovers, [])
+        finally:
+            shutil.rmtree(test_dir, True)
+
+    def test_duplicate_ids_reported(self):
+        test_dir = tempfile.mkdtemp()
+        work_path = os.path.join(test_dir, 'duplicate.mgf')
+        with open(work_path, 'w') as fh:
+            fh.write('BEGIN IONS\nTITLE=Same\nPEPMASS=1\n1 2\nEND IONS\n'
+                     'BEGIN IONS\nTITLE=Same\nPEPMASS=2\n3 4\nEND IONS\n')
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter('always')
+                with mgf.IndexedMGF(work_path) as inst:
+                    conflicts = inst.index.duplicates
+                    self.assertEqual(list(conflicts), ['Same'])
+                    self.assertEqual(len(conflicts['Same']), 2)
+                    self.assertEqual(conflicts['Same'][0][0], 0)
+                    self.assertEqual(conflicts['Same'][1][0], conflicts['Same'][0][1])
+                    # Every occurrence is retrievable, not just the first/last.
+                    spectra = inst.get_all_by_id('Same')
+                    self.assertEqual([s['params']['pepmass'][0] for s in spectra],
+                                     [1.0, 2.0])
+                    self.assertEqual(inst['Same']['params']['pepmass'][0], 1.0)
+                    inst.write_byte_offsets()
+            messages = [str(item.message) for item in caught]
+            duplicates = [msg for msg in messages if 'Duplicate record IDs' in msg]
+            self.assertTrue(duplicates, messages)
+            self.assertIn('Same', duplicates[0])
+            self.assertIn(str(conflicts['Same'][0][0]), duplicates[0])
+            self.assertIn(str(conflicts['Same'][1][0]), duplicates[0])
+            # The conflict table survives saving and loading the index.
+            with warnings.catch_warnings(record=True):
+                warnings.simplefilter('always')
+                with mgf.IndexedMGF(work_path) as inst:
+                    self.assertEqual(inst.index.duplicates['Same'],
+                                     [list(span) for span in conflicts['Same']])
+        finally:
+            shutil.rmtree(test_dir, True)
 
     def test_mz_only_peak_lines(self):
             # a peak line without intensity must not shift later intensities onto the wrong m/z

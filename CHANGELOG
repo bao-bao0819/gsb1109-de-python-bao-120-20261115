@@ -3,6 +3,18 @@
 
  - Fix :py:mod:`ms1` and :py:mod:`ms2` to ensure array alignment (`#228 <https://github.com/levitsky/pyteomics/pull/228>`_ by KBS).
  - Speed up :py:func:`parser.coverage_mask` (`#229 <https://github.com/levitsky/pyteomics/pull/229>`_ by Bharat Kaurav).
+ - Saved byte offset indexes now record their schema version, offset convention,
+   parser parameters and a source file fingerprint (size, mtime and content
+   digest). An index that does not match the current source or parser is
+   rebuilt instead of being applied to a recompressed or edited file.
+ - Saved byte offset indexes are written atomically, so an interrupted build
+   never publishes a partially written index or clobbers a valid one.
+ - Duplicate IDs encountered while building an index are now reported with
+   :py:class:`pyteomics.auxiliary.DuplicateIDWarning`, listing every
+   conflicting ID and all of its positions. The complete conflict table is
+   kept in the index's ``duplicates`` attribute and
+   :py:meth:`get_all_by_id` retrieves every occurrence instead of keeping
+   only the last position.
 
 
 5.0.2

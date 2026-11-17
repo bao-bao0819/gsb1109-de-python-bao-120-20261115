@@ -450,12 +450,20 @@ class MzMLb(TimeOrderedIndexedReaderMixin, TaskMappingMixin):
 
     def build_byte_index(self):
         index = HierarchicalOffsetIndex()
+        conflicts = {}
         for label in [u'spectrum', u'chromatogram']:
             sub = index[label]
             ids = bytearray(np.array(self.handle['mzML_{}Index_idRef'.format(label)])).split(b"\x00")
             offsets = self.handle["mzML_{}Index".format(label)][:-1]
             for i, o in enumerate(offsets):
-                sub[ids[i].decode('utf8')] = o
+                key = ids[i].decode('utf8')
+                if key in sub:
+                    conflicts.setdefault(label, {}).setdefault(
+                        key, [sub[key]]).append(o)
+                else:
+                    sub[key] = o
+        if conflicts:
+            aux._warn_duplicates(conflicts, stacklevel=4)
         return index
 
     def get_by_id(self, id):

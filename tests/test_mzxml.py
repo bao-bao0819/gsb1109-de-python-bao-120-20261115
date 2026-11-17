@@ -8,6 +8,8 @@ from pyteomics import xml
 from data import mzxml_spectra
 import tempfile
 import shutil
+import json
+import warnings
 import numpy as np
 
 class MzXMLTest(unittest.TestCase):
@@ -63,6 +65,53 @@ class MzXMLTest(unittest.TestCase):
             self.assertTrue(isinstance(inst._offset_index, xml.HierarchicalOffsetIndex))
         self.assertTrue(inst._source.closed)
         shutil.rmtree(test_dir, True)
+
+    def test_index_rebuilt_when_source_changes(self):
+        test_dir = tempfile.mkdtemp()
+        work_path = os.path.join(test_dir, self.path)
+        try:
+            with open(self.path, 'rb') as source:
+                data = source.read()
+            with open(work_path, 'wb') as dest:
+                dest.write(data)
+            MzXML.prebuild_byte_offset_file(work_path)
+            with MzXML(work_path, use_index=True) as inst:
+                self.assertEqual(list(inst.index['scan']), ['19', '20'])
+                ipath = inst._byte_offset_filename
+            # Same size, different content: the stale index must not be reused.
+            with open(work_path, 'wb') as dest:
+                dest.write(data.replace(b'num="20"', b'num="21"'))
+            with MzXML(work_path, use_index=True) as inst:
+                self.assertEqual(list(inst.index['scan']), ['19', '21'])
+            with open(ipath) as fh:
+                container = json.load(fh)
+            self.assertEqual(container['@pyteomics_offset_convention'],
+                             MzXML._offset_convention)
+        finally:
+            shutil.rmtree(test_dir, True)
+
+    def test_duplicate_ids_reported(self):
+        test_dir = tempfile.mkdtemp()
+        work_path = os.path.join(test_dir, self.path)
+        try:
+            with open(self.path, 'rb') as source:
+                data = source.read()
+            with open(work_path, 'wb') as dest:
+                dest.write(data.replace(b'num="20"', b'num="19"'))
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter('always')
+                with MzXML(work_path, use_index=True) as inst:
+                    self.assertEqual(list(inst.index.duplicates), ['scan'])
+                    offsets = inst.index.duplicates['scan']['19']
+                    self.assertEqual(len(offsets), 2)
+                    # All occurrences are retrievable, not just the last one.
+                    scans = inst.get_all_by_id('19')
+                    self.assertEqual([scan['msLevel'] for scan in scans], [1, 2])
+            messages = [str(item.message) for item in caught]
+            self.assertTrue(any('Duplicate record IDs' in msg for msg in messages),
+                            messages)
+        finally:
+            shutil.rmtree(test_dir, True)
 
     def test_coerce_duration_type(self):
         with MzXML(self.path) as handle:
