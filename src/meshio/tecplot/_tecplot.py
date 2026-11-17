@@ -12,6 +12,7 @@ from .._exceptions import ReadError, WriteError
 from .._files import open_file
 from .._helpers import register_format
 from .._mesh import Mesh
+from .._node_order import require_lossless
 
 zone_key_to_type = {
     "T": str,
@@ -385,6 +386,7 @@ def write(filename, mesh):
             cell_types.append(c.type)
             cell_blocks.append(ic)
         else:
+            require_lossless(c.type, "Tecplot")
             warn(
                 (
                     "Tecplot does not support cell type '{}'. "

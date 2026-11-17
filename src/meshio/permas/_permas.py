@@ -10,6 +10,7 @@ from .._exceptions import ReadError
 from .._files import open_file
 from .._helpers import register_format
 from .._mesh import CellBlock, Mesh
+from .._node_order import apply_node_order
 
 permas_to_meshio_type = {
     "PLOT1": "vertex",
@@ -88,7 +89,9 @@ def read_buffer(f):
             points, point_gids = _read_nodes(f)
         elif keyword.startswith("ELEMENT"):
             key, idx = _read_cells(f, keyword, point_gids)
-            cells.append(CellBlock(key, idx))
+            cells.append(
+                CellBlock(key, apply_node_order(key, idx, "permas", "meshio"))
+            )
         elif keyword.startswith("NSET"):
             params_map = get_param_map(keyword, required_keys=["NSET"])
             setids = read_set(f, params_map)
@@ -239,47 +242,16 @@ def write(filename, mesh):
         for k, x in enumerate(points):
             f.write(f"{k + 1} {x[0]} {x[1]} {x[2]}\n")
         eid = 0
-        tria6_order = [0, 3, 1, 4, 2, 5]
-        tet10_order = [0, 4, 1, 5, 2, 6, 7, 8, 9, 3]
-        quad9_order = [0, 4, 1, 7, 8, 5, 3, 6, 2]
-        wedge15_order = [0, 6, 1, 7, 2, 8, 9, 10, 11, 3, 12, 4, 13, 5, 14]
         for cell_block in mesh.cells:
-            node_idcs = cell_block.data
+            node_idcs = apply_node_order(
+                cell_block.type, cell_block.data, "meshio", "permas"
+            )
             f.write("!\n")
             f.write("$ELEMENT TYPE=" + meshio_to_permas_type[cell_block.type] + "\n")
-            if cell_block.type == "tetra10":
-                for row in node_idcs:
-                    eid += 1
-                    mylist = row.tolist()
-                    mylist = [mylist[i] for i in tet10_order]
-                    nids_strs = (str(nid + 1) for nid in mylist)
-                    f.write(str(eid) + " " + " ".join(nids_strs) + "\n")
-            elif cell_block.type == "triangle6":
-                for row in node_idcs:
-                    eid += 1
-                    mylist = row.tolist()
-                    mylist = [mylist[i] for i in tria6_order]
-                    nids_strs = (str(nid + 1) for nid in mylist)
-                    f.write(str(eid) + " " + " ".join(nids_strs) + "\n")
-            elif cell_block.type == "quad9":
-                for row in node_idcs:
-                    eid += 1
-                    mylist = row.tolist()
-                    mylist = [mylist[i] for i in quad9_order]
-                    nids_strs = (str(nid + 1) for nid in mylist)
-                    f.write(str(eid) + " " + " ".join(nids_strs) + "\n")
-            elif cell_block.type == "wedge15":
-                for row in node_idcs:
-                    eid += 1
-                    mylist = row.tolist()
-                    mylist = [mylist[i] for i in wedge15_order]
-                    nids_strs = (str(nid + 1) for nid in mylist)
-                    f.write(str(eid) + " " + " ".join(nids_strs) + "\n")
-            else:
-                for row in node_idcs:
-                    eid += 1
-                    nids_strs = (str(nid + 1) for nid in row.tolist())
-                    f.write(str(eid) + " " + " ".join(nids_strs) + "\n")
+            for row in node_idcs:
+                eid += 1
+                nids_strs = (str(nid + 1) for nid in row.tolist())
+                f.write(str(eid) + " " + " ".join(nids_strs) + "\n")
         f.write("$END STRUCTURE\n")
         f.write("$EXIT COMPONENT\n")
         f.write("$FIN\n")

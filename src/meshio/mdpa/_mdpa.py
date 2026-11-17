@@ -12,7 +12,8 @@ from .._common import num_nodes_per_cell, raw_from_cell_data, warn
 from .._exceptions import ReadError, WriteError
 from .._files import open_file
 from .._helpers import register_format
-from .._mesh import Mesh
+from .._mesh import CellBlock, Mesh
+from .._node_order import apply_node_order, node_order
 
 ## We check if we can read/write the mesh natively from Kratos
 # TODO: Implement native reading
@@ -196,44 +197,12 @@ def _prepare_cells(cells, cell_tags):
             output_cell_tags[key]["gmsh:geometrical"], dtype=int
         )
 
-    # Kratos cells are mostly ordered like VTK, with a few exceptions:
-    if "hexahedron20" in cells:
-        cells["hexahedron20"] = cells["hexahedron20"][
-            :, [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 19, 18, 17, 12, 13, 14, 15]
-        ]
-    if "hexahedron27" in cells:
-        cells["hexahedron27"] = cells["hexahedron27"][
-            :,
-            [
-                0,
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7,
-                8,
-                11,
-                10,
-                9,
-                16,
-                19,
-                18,
-                17,
-                12,
-                13,
-                14,
-                15,
-                22,
-                24,
-                21,
-                23,
-                20,
-                25,
-                26,
-            ],
-        ]
+    # Kratos cells are mostly ordered like VTK, with a few exceptions. The
+    # explicit tables live in meshio._node_order.
+    for k, (cell_type, data) in enumerate(cells):
+        if not isinstance(data, np.ndarray):
+            data = np.array(data)
+        cells[k] = (cell_type, data[:, node_order("mdpa", "meshio", cell_type)])
 
     return has_additional_tag_data
 
@@ -445,45 +414,15 @@ def write(filename, mesh, float_fmt=".16e", binary=False):
     else:
         points = mesh.points
 
-    # Kratos cells are mostly ordered like VTK, with a few exceptions:
-    cells = mesh.cells.copy()
-    if "hexahedron20" in cells:
-        cells["hexahedron20"] = cells["hexahedron20"][
-            :, [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 17, 18, 19, 12, 15, 14, 13]
-        ]
-    if "hexahedron27" in cells:
-        cells["hexahedron27"] = cells["hexahedron27"][
-            :,
-            [
-                0,
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7,
-                8,
-                11,
-                10,
-                9,
-                16,
-                17,
-                18,
-                19,
-                12,
-                15,
-                14,
-                13,
-                22,
-                24,
-                21,
-                23,
-                20,
-                25,
-                26,
-            ],
-        ]
+    # Kratos cells are mostly ordered like VTK, with a few exceptions. The
+    # explicit tables live in meshio._node_order.
+    cells = [
+        CellBlock(
+            cell_block.type,
+            apply_node_order(cell_block.type, cell_block.data, "meshio", "mdpa"),
+        )
+        for cell_block in mesh.cells
+    ]
 
     with open_file(filename, "wb") as fh:
         # Write some additional info

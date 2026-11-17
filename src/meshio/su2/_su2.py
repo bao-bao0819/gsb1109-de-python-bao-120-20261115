@@ -12,6 +12,7 @@ from .._exceptions import ReadError
 from .._files import open_file
 from .._helpers import register_format
 from .._mesh import CellBlock, Mesh
+from .._node_order import require_lossless
 
 # follows VTK conventions
 su2_type_to_numnodes = {
@@ -260,6 +261,7 @@ def write(filename, mesh):
         # Through warnings about unsupported types
         for cell_block in mesh.cells:
             if cell_block.type not in meshio_to_su2_type:
+                require_lossless(cell_block.type, ".su2")
                 warn(
                     ".su2 does not support tags elements of type {}.\n"
                     "Skipping ...".format(type)

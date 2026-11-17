@@ -16,6 +16,7 @@ from .._exceptions import ReadError
 from .._files import open_file
 from .._helpers import register_format
 from .._mesh import Mesh
+from .._node_order import require_lossless
 
 meshio_only = {
     "zone": {
@@ -425,6 +426,15 @@ def write(filename, mesh: Mesh, float_fmt: str = ".16e", binary: bool = False):
     skip = [c.type for c in mesh.cells if c.type not in meshio_only["zone"]]
     if skip:
         warn(f'FLAC3D format only supports 3D cells. Skipping {", ".join(skip)}.')
+    for cell_block in mesh.cells:
+        for group in ("zone", "face"):
+            key = meshio_only[group].get(cell_block.type)
+            if (
+                key is not None
+                and len(meshio_to_flac3d_order[key])
+                < cell_block.data.shape[1]
+            ):
+                require_lossless(cell_block.type, "FLAC3D")
 
     # split into face/zone data
     zcells, fcells, zsets, fsets = split_f_z(mesh)

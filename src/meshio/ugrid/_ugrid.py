@@ -15,6 +15,7 @@ from .._exceptions import ReadError
 from .._files import open_file
 from .._helpers import register_format
 from .._mesh import CellBlock, Mesh
+from .._node_order import require_lossless
 
 # Float size and endianness are recorded by these suffixes
 # binary files come in C-type or FORTRAN type
@@ -193,6 +194,9 @@ def _write_buffer(f, file_type, mesh):
             ugrid_counts[key] = data.shape[0]
             ugrid_meshio_id[key] = i
         else:
+            # UGRID has no high-order cell types. Refuse to silently write the
+            # corner nodes only, which would misrepresent the element order.
+            require_lossless(key, "UGRID")
             msg = f"UGRID mesh format doesn't know {key} cells. Skipping."
             warn(msg)
             continue

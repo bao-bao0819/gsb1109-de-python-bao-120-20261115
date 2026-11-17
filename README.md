@@ -138,6 +138,32 @@ meshio.write_points_cells("foo.vtk", points, cells)
 For both input and output, you can optionally specify the exact `file_format`
 (in case you would like to enforce ASCII over binary VTK, for example).
 
+#### High-order cells and node ordering
+
+High-order cells (`tetra10`, `hexahedron20`, `hexahedron27`, `wedge15`,
+`pyramid13`, ...) are stored in one canonical node ordering. Formats that use a
+different ordering for the mid-side nodes are converted with an explicit
+source -> target table in [`src/meshio/_node_order.py`](src/meshio/_node_order.py);
+the reverse direction is derived from the same table, so a read/write pair is
+always an exact inverse.
+
+```python
+import meshio
+
+# Inspect the exact permutation used for a cell type, or apply it to a mesh.
+meshio.node_order("gmsh", "meshio", "hexahedron27")
+meshio.node_order_trace("gmsh", "vtk", "wedge15")
+
+converted = mesh.convert_node_order("meshio", "gmsh")
+print(converted.info["node_order"])
+```
+
+Point indices are not renumbered, so `point_data` stays aligned with
+`mesh.points`. A high-order cell whose ordering is unknown raises
+`meshio.OrderingError` instead of being written with silently permuted mid-side
+nodes, and a format that can only store corner nodes raises `meshio.WriteError`
+rather than writing the cell as linear while claiming the original order.
+
 #### Time series
 
 The [XDMF format](https://xdmf.org/index.php/XDMF_Model_and_Format) supports

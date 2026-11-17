@@ -7,9 +7,11 @@ import numpy as np
 
 from ..__about__ import __version__ as version
 from .._common import _pick_first_int_data, warn
+from .._exceptions import WriteError
 from .._files import open_file
 from .._helpers import register_format
 from .._mesh import CellBlock, Mesh
+from .._node_order import require_lossless
 
 meshio_to_avsucd_type = {
     "vertex": "pt",
@@ -220,6 +222,9 @@ def _write_cells(f, cells, material):
     i = 0
     for cell_block in cells:
         cell_type = cell_block.type
+        if cell_type not in meshio_to_avsucd_type:
+            require_lossless(cell_type, "AVS-UCD")
+            raise WriteError(f"AVS-UCD does not support cell type '{cell_type}'.")
         v = cell_block.data
         for cell in v[:, meshio_to_avsucd_order[cell_type]]:
             cell_str = " ".join(str(c) for c in cell + 1)

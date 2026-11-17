@@ -14,6 +14,7 @@ from .._exceptions import ReadError
 from .._files import open_file
 from .._helpers import register_format
 from .._mesh import Mesh
+from .._node_order import require_lossless
 from ._medit_internal import medit_codes
 
 
@@ -357,6 +358,9 @@ def write_ascii_file(filename, mesh, float_fmt=".16e"):
             try:
                 medit_name, num = medit_from_meshio[cell_type]
             except KeyError:
+                # MEDIT only has linear cell types. Refuse to silently drop the
+                # mid-side nodes of a high-order cell.
+                require_lossless(cell_type, "MEDIT")
                 msg = f"MEDIT's mesh format doesn't know {cell_type} cells. Skipping."
                 warn(msg)
                 continue
@@ -478,6 +482,7 @@ def write_binary_file(f, mesh):
             try:
                 medit_key = medit_from_meshio[cell_block.type]
             except KeyError:
+                require_lossless(cell_block.type, "MEDIT")
                 warn(
                     f"MEDIT's mesh format doesn't know {cell_block.type} cells. "
                     + "Skipping."

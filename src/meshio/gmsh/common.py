@@ -7,6 +7,7 @@ from numpy.typing import ArrayLike
 
 from .._common import warn
 from .._exceptions import ReadError, WriteError
+from .._node_order import node_order
 
 c_int = np.dtype("int32")
 c_double = np.dtype("float64")
@@ -50,7 +51,15 @@ def _read_physical_names(f, field_data):
     _fast_forward_to_end_block(f, "PhysicalNames")
 
 
-def _read_data(f, tag, data_dict, data_size, is_ascii):
+def _read_data(f, tag, data_dict, data_size, is_ascii, entity_tags=None):
+    """Read a $NodeData/$ElementData block.
+
+    Each entry carries an explicit 1-based entity tag in its first column. Those
+    tags need not match the order in which the entities themselves were stored
+    (Gmsh may write node blocks in arbitrary tag order). When ``entity_tags``
+    (the 1-based tags in stored order) is provided, the values are rearranged so
+    that they line up with the stored entities.
+    """
     # Read string tags
     num_string_tags = int(f.readline().decode())
     string_tags = [
@@ -69,14 +78,13 @@ def _read_data(f, tag, data_dict, data_size, is_ascii):
         data = np.fromfile(f, count=num_items * (1 + num_components), sep=" ").reshape(
             (num_items, 1 + num_components)
         )
-        # The first entry is the node number
+        index = data[:, 0].astype(int)
         data = data[:, 1:]
     else:
         # binary
         dtype = [("index", c_int), ("values", c_double, (num_components,))]
         data = np.fromfile(f, count=num_items, dtype=dtype)
-        if not (data["index"] == range(1, num_items + 1)).all():
-            raise ReadError()
+        index = data["index"].astype(int)
         data = np.ascontiguousarray(data["values"])
 
     _fast_forward_to_end_block(f, tag)
@@ -85,6 +93,24 @@ def _read_data(f, tag, data_dict, data_size, is_ascii):
     # If shape[1] == 1, cut it off.
     if data.shape[1] == 1:
         data = data[:, 0]
+
+    if entity_tags is not None:
+        entity_tags = np.asarray(entity_tags, dtype=int)
+        if len(index) != len(np.unique(index)):
+            raise ReadError(f"Duplicate indices in ${tag} block.")
+        num_rows = len(entity_tags)
+        max_tag = int(entity_tags.max()) if num_rows else 0
+        # tag_to_row maps the 1-based entity tag to its row in storage order.
+        tag_to_row = np.full(max_tag + 1, -1, dtype=int)
+        tag_to_row[entity_tags] = np.arange(num_rows)
+        if np.any(index < 1) or np.any(index > max_tag):
+            raise ReadError(f"Index out of range in ${tag} block.")
+        rows = tag_to_row[index]
+        if np.any(rows < 0):
+            raise ReadError(f"Index in ${tag} block refers to an unknown entity.")
+        out = np.zeros((num_rows,) + data.shape[1:], dtype=data.dtype)
+        out[rows] = data
+        data = out
 
     data_dict[string_tags[0]] = data
 
@@ -162,55 +188,27 @@ _meshio_to_gmsh_type = {v: k for k, v in _gmsh_to_meshio_type.items()}
 
 
 def _gmsh_to_meshio_order(cell_type: str, idx: ArrayLike) -> np.ndarray:
-    # Gmsh cells are mostly ordered like VTK, with a few exceptions:
-    meshio_ordering = {
-        # fmt: off
-        "tetra10": [0, 1, 2, 3, 4, 5, 6, 7, 9, 8],
-        "hexahedron20": [
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 13,
-            9, 16, 18, 19, 17, 10, 12, 14, 15,
-        ],  # https://vtk.org/doc/release/4.2/html/classvtkQuadraticHexahedron.html and https://gmsh.info/doc/texinfo/gmsh.html#Node-ordering
-        "hexahedron27": [
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 13,
-            9, 16, 18, 19, 17, 10, 12, 14, 15,
-            22, 23, 21, 24, 20, 25, 26,
-        ],
-        "wedge15": [
-            0, 1, 2, 3, 4, 5, 6, 9, 7, 12, 14, 13, 8, 10, 11
-        ],  # http://davis.lbl.gov/Manuals/VTK-4.5/classvtkQuadraticWedge.html and https://gmsh.info/doc/texinfo/gmsh.html#Node-ordering
-        "pyramid13": [0, 1, 2, 3, 4, 5, 8, 10, 6, 7, 9, 11, 12],
-        # fmt: on
-    }
+    # Gmsh cells are mostly ordered like VTK, with a few exceptions; the
+    # explicit tables live in meshio._node_order.
     idx = np.asarray(idx)
-    if cell_type not in meshio_ordering:
-        return idx
-    return idx[:, meshio_ordering[cell_type]]
+    order = node_order("gmsh", "meshio", cell_type)
+    if len(order) != idx.shape[1]:
+        raise ReadError(
+            f"Expected {len(order)} nodes for '{cell_type}', got {idx.shape[1]}."
+        )
+    return idx[:, order]
 
 
 def _meshio_to_gmsh_order(cell_type: str, idx: ArrayLike) -> np.ndarray:
-    # Gmsh cells are mostly ordered like VTK, with a few exceptions:
-    gmsh_ordering = {
-        # fmt: off
-        "tetra10": [0, 1, 2, 3, 4, 5, 6, 7, 9, 8],
-        "hexahedron20": [
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 16,
-            9, 17, 10, 18, 19, 12, 15, 13, 14,
-        ],
-        "hexahedron27": [
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 16,
-            9, 17, 10, 18, 19, 12, 15, 13, 14,
-            24, 22, 20, 21, 23, 25, 26,
-        ],
-        "wedge15": [
-            0, 1, 2, 3, 4, 5, 6, 8, 12, 7, 13, 14, 9, 11, 10,
-        ],
-        "pyramid13": [0, 1, 2, 3, 4, 5, 8, 9, 6, 10, 7, 11, 12],
-        # fmt: on
-    }
+    # Inverse of _gmsh_to_meshio_order; the table is derived from the explicit
+    # source -> target table rather than maintained separately.
     idx = np.asarray(idx)
-    if cell_type not in gmsh_ordering:
-        return idx
-    return idx[:, gmsh_ordering[cell_type]]
+    order = node_order("meshio", "gmsh", cell_type)
+    if len(order) != idx.shape[1]:
+        raise WriteError(
+            f"Expected {len(order)} nodes for '{cell_type}', got {idx.shape[1]}."
+        )
+    return idx[:, order]
 
 
 def _write_physical_names(fh, field_data):

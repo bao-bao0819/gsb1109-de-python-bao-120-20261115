@@ -79,9 +79,16 @@ def read_buffer(f, is_ascii: bool, data_size):
         elif environ == "Periodic":
             periodic = _read_periodic(f, is_ascii, data_size)
         elif environ == "NodeData":
-            _read_data(f, "NodeData", point_data, data_size, is_ascii)
+            # Gmsh 4.1 stores points in file order but indexes NodeData by node
+            # tag. Rearrange the data so both stay aligned. _read_nodes returns
+            # 0-based tags here.
+            _read_data(
+                f, "NodeData", point_data, data_size, is_ascii, point_tags + 1
+            )
         elif environ == "ElementData":
-            _read_data(f, "ElementData", cell_data_raw, data_size, is_ascii)
+            _read_data(
+                f, "ElementData", cell_data_raw, data_size, is_ascii
+            )
         else:
             # From
             # <http://gmsh.info/doc/texinfo/gmsh.html#MSH-file-format>:

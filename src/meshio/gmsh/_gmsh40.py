@@ -59,7 +59,11 @@ def read_buffer(f, is_ascii: bool, data_size) -> Mesh:
         elif environ == "Periodic":
             periodic = _read_periodic(f, is_ascii)
         elif environ == "NodeData":
-            _read_data(f, "NodeData", point_data, data_size, is_ascii)
+            # NodeData is indexed by node tag; points are stored in file order.
+            # In msh4.0 the tags read by _read_nodes are already 1-based.
+            _read_data(
+                f, "NodeData", point_data, data_size, is_ascii, point_tags
+            )
         elif environ == "ElementData":
             _read_data(f, "ElementData", cell_data_raw, data_size, is_ascii)
         else:

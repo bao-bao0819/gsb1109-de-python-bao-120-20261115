@@ -63,7 +63,11 @@ def read_buffer(f, is_ascii, data_size):
         elif environ == "Periodic":
             periodic = _read_periodic(f)
         elif environ == "NodeData":
-            _read_data(f, "NodeData", point_data, data_size, is_ascii)
+            # NodeData is indexed by the 1-based node tag, which need not match
+            # the order in which the points are stored.
+            _read_data(
+                f, "NodeData", point_data, data_size, is_ascii, point_tags
+            )
         elif environ == "ElementData":
             _read_data(f, "ElementData", cell_data_raw, data_size, is_ascii)
         else:

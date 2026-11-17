@@ -22,6 +22,9 @@ topological_dimension = {
     "tetra10": 3,
     "hexahedron27": 3,
     "wedge18": 3,
+    "wedge15": 3,
+    "hexahedron24": 3,
+    "pyramid13": 3,
     "pyramid14": 3,
     "vertex": 0,
     "quad8": 2,
@@ -67,6 +70,7 @@ topological_dimension = {
     "hexahedron512": 3,
     "hexahedron729": 3,
     "hexahedron1000": 3,
+    "hexahedron1331": 3,
     "wedge126": 3,
     "wedge196": 3,
     "wedge288": 3,
@@ -233,6 +237,35 @@ class Mesh:
 
     def copy(self):
         return copy.deepcopy(self)
+
+    def convert_node_order(self, source: str, target: str):
+        """Return a copy with connectivity converted from ``source`` to ``target``.
+
+        The conversion is driven by the explicit source -> target tables in
+        :mod:`meshio._node_order`. Point indices are left untouched, so
+        ``point_data`` stays aligned by construction; the returned copy gets an
+        ``info["node_order"]`` trace with the exact permutation used for every
+        cell block.
+        """
+        from ._node_order import node_order, node_order_trace
+
+        out = copy.deepcopy(self)
+        trace = {}
+        for k, cell_block in enumerate(out.cells):
+            order = node_order(source, target, cell_block.type)
+            if cell_block.data.shape[1] != len(order):
+                raise ValueError(
+                    f"Cell block {k} ('{cell_block.type}') has "
+                    f"{cell_block.data.shape[1]} nodes, expected {len(order)}."
+                )
+            cell_block.data = cell_block.data[:, order]
+            trace[f"{k}:{cell_block.type}"] = node_order_trace(
+                source, target, cell_block.type
+            )
+        info = dict(out.info or {})
+        info["node_order"] = trace
+        out.info = info
+        return out
 
     def write(self, path_or_buf, file_format: str | None = None, **kwargs):
         # avoid circular import

@@ -14,6 +14,7 @@ from .._exceptions import ReadError, WriteError
 from .._files import open_file
 from .._helpers import register_format
 from .._mesh import Mesh
+from .._node_order import require_lossless
 
 
 def _skip_to(f, char):
@@ -445,6 +446,7 @@ def write(filename, mesh, binary=True):
             try:
                 ansys_cell_type = meshio_to_ansys_type[cell_type]
             except KeyError:
+                require_lossless(cell_type, "ANSYS")
                 legal_keys = ", ".join(meshio_to_ansys_type.keys())
                 raise KeyError(
                     f"Illegal ANSYS cell type '{cell_type}'. (legal: {legal_keys})"

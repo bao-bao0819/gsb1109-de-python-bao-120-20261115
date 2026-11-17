@@ -42,6 +42,12 @@ from ._helpers import (
     write_points_cells,
 )
 from ._mesh import CellBlock, Mesh
+from ._node_order import (
+    OrderingError,
+    apply_node_order,
+    node_order,
+    node_order_trace,
+)
 
 __all__ = [
     "abaqus",
@@ -85,6 +91,10 @@ __all__ = [
     "CellBlock",
     "ReadError",
     "WriteError",
+    "OrderingError",
+    "node_order",
+    "node_order_trace",
+    "apply_node_order",
     "topological_dimension",
     "__version__",
 ]
