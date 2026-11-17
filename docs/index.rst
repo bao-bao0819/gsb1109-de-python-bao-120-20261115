@@ -57,6 +57,7 @@ application decides which fields and reconciliation checks it requires.
    json
    customising
    bank-formats
+   manifests
    compatibility
    troubleshooting
 

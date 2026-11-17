@@ -24,7 +24,7 @@ Example:
     <500.00 EUR>
 """
 
-from . import json, models, parser, processors, tags, utils
+from . import json, manifest, models, parser, processors, tags, utils
 from .__about__ import __version__
 from .json import JSONEncoder
 from .options import Options
@@ -36,6 +36,7 @@ __all__ = [
     'Options',
     '__version__',
     'json',
+    'manifest',
     'models',
     'parse',
     'parse_statements',
