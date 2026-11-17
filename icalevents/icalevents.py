@@ -8,6 +8,19 @@ import urllib3
 
 from .icalparser import Event, parse_events
 from .icaldownload import ICalDownload
+from .occupancy import (
+    BufferedInstance as BufferedInstance,
+    BufferRule as BufferRule,
+    OccupancyReport as OccupancyReport,
+    ResourceBuffer as ResourceBuffer,
+    ResourceRule as ResourceRule,
+    calendar_occupancy as calendar_occupancy,
+    daily_occupancy as daily_occupancy,
+    expand_instances as expand_instances,
+    expand_occurrences as expand_occurrences,
+    occupancy as occupancy,
+    occupancy_report as occupancy_report,
+)
 
 
 # Lock for event data

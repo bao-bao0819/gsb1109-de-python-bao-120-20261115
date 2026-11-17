@@ -65,6 +65,7 @@ class Event:
         self.transparent: bool = False
         self.recurring: bool = False
         self.location: str | None = None
+        self.resource: str | None = None
         self.private: bool = False
         self.created: datetime | None = None
         self.last_modified: datetime | None = None
@@ -153,6 +154,7 @@ class Event:
         ne.all_day = self.all_day
         ne.recurring = self.recurring
         ne.location = self.location
+        ne.resource = self.resource
         ne.attendee = self.attendee
         ne.organizer = self.organizer
         ne.private = self.private
@@ -217,6 +219,7 @@ def create_event(component: Component, strict: bool) -> Event:
     if component.get("rrule"):
         event.recurring = True
     event.location = encode(component.get("location"))
+    event.resource = encode(component.get("resource") or component.get("x-resource"))
 
     if component.get("attendee"):
         attendees = component.get("attendee")
