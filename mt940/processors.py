@@ -530,6 +530,33 @@ def _parse_mt940_gvcodes(
     return result
 
 
+def _decode_structured_purpose(
+    result: dict[str, Any],
+    *,
+    gvc_leading_text: bool,
+) -> None:
+    """Split a decoded purpose at GVC keywords and trim a dangling BIC label.
+
+    Args:
+        result: Mutable mapping containing ``purpose`` and receiving the GVC
+            outputs.
+        gvc_leading_text: Value of the matching :class:`Options` switch.
+    """
+    purpose = result.get('purpose')
+
+    if purpose and any(gvk in purpose for gvk in GVC_KEYS if gvk):
+        result.update(
+            _parse_mt940_gvcodes(
+                result['purpose'],
+                keep_leading_text=gvc_leading_text,
+            )
+        )
+
+    if result.get('purpose'):
+        # Remove trailing "BIC" without an actual BIC value
+        result['purpose'] = result['purpose'].removesuffix(' BIC')
+
+
 def transaction_details_post_processor(
     transactions: models.Transactions,
     tag: tags.Tag,
@@ -546,10 +573,18 @@ def transaction_details_post_processor(
     field after adding all mapped outputs, including ``None`` for missing
     fields.
 
+    With ``Options.detail_candidates`` enabled, the physical lines are kept
+    and analyzed by :mod:`mt940.details` instead of being flattened first. A
+    unique grammar-consistent reading is decoded through the same pipeline.
+    Competing readings are not forced into one split: the raw lines stay in
+    ``transaction_details`` and the transaction gains ``detail_candidates``
+    plus the ``detail_issues`` reports. Missing required fields and unknown
+    legal extensions are reported there without reordering source lines.
+
     Args:
-        transactions: Collection supplying ``applicant_iban`` and
-            ``gvc_leading_text`` options. Missing options use disabled
-            defaults.
+        transactions: Collection supplying ``applicant_iban``,
+            ``gvc_leading_text`` and ``detail_candidates`` options. Missing
+            options use disabled defaults.
         tag: Unused tag context.
         tag_dict: Capture mapping containing raw ``transaction_details`` text.
         result: Mutable result mapping receiving decoded fields. It must
@@ -571,29 +606,50 @@ def transaction_details_post_processor(
     detail_keys = (
         DETAIL_KEYS_APPLICANT_IBAN if options.applicant_iban else DETAIL_KEYS
     )
-    details = tag_dict['transaction_details']
-    details = ''.join(detail.strip('\n\r') for detail in details.splitlines())
+    raw_details = tag_dict['transaction_details']
+    details = ''.join(
+        detail.strip('\n\r') for detail in raw_details.splitlines()
+    )
 
-    if re.match(r'^\d{3}\?\d{2}', details):
+    if not re.match(r'^\d{3}\?\d{2}', details):
+        return result
+
+    if options.detail_candidates:
+        from . import details as detail_module
+
+        analysis = detail_module.analyze_details(
+            raw_details, detail_keys=detail_keys
+        )
+        reading = analysis.unique_reading
+        if reading is None:
+            # Evidence is not unique: preserve the original lines and every
+            # still-valid structural candidate instead of forcing a split.
+            result['transaction_details'] = raw_details
+            result['detail_candidates'] = [
+                dict(candidate) for candidate in analysis.candidates
+            ]
+            result['detail_issues'] = [
+                issue.as_dict() for issue in analysis.issues
+            ]
+            return result
+
+        result.update(reading.decode(detail_keys, space=space))
+        if analysis.issues:
+            result['detail_issues'] = [
+                issue.as_dict() for issue in analysis.issues
+            ]
+    else:
         result.update(
-            _parse_mt940_details(details, space=space, detail_keys=detail_keys)
+            _parse_mt940_details(
+                details, space=space, detail_keys=detail_keys
+            )
         )
 
-        purpose = result.get('purpose')
-
-        if purpose and any(gvk in purpose for gvk in GVC_KEYS if gvk):
-            result.update(
-                _parse_mt940_gvcodes(
-                    result['purpose'],
-                    keep_leading_text=options.gvc_leading_text,
-                )
-            )
-
-        if result.get('purpose'):
-            # Remove trailing "BIC" without an actual BIC value
-            result['purpose'] = result['purpose'].removesuffix(' BIC')
-
-        del result['transaction_details']
+    _decode_structured_purpose(
+        result,
+        gvc_leading_text=options.gvc_leading_text,
+    )
+    del result['transaction_details']
 
     return result
 

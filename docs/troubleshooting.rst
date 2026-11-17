@@ -122,6 +122,51 @@ GVC keywords. ``unbounded_details`` removes the legacy capture cap, but later
 processors can still discard text. Keep the source alongside parsed data if
 you need an exact original record.
 
+A continuation line looks like a marker
+----------------------------------------
+
+A structured ``:86:`` wraps at 65 characters. When a wrapped line happens to
+begin with marker-shaped text such as ``?30``, the default flattened decoder
+treats it as a real subfield marker. Enable ``detail_candidates`` to keep the
+physical lines and inspect each grammar-consistent reading:
+
+.. doctest::
+
+   >>> detail = '105?00Text?20' + 'A' * 52 + '\n?30BIC?31IBAN'
+   >>> source = ':20:EXAMPLE\n:61:260102C1,00NTRFREF\n:86:' + detail
+   >>> forced = mt940.parse(source)[0].data
+   >>> forced['applicant_bin']
+   'BIC'
+   >>> careful = mt940.parse(
+   ...     source, options=mt940.Options(detail_candidates=True)
+   ... )[0].data
+   >>> len(careful['detail_candidates'])
+   2
+   >>> careful['transaction_details'] == detail
+   True
+   >>> [issue['kind'] for issue in careful['detail_issues']]
+   ['ambiguous_structure']
+
+A unique reading is stored through the same pipeline and the raw field is
+removed, so ordinary statements keep their output. Only competing readings
+retain the original lines in ``transaction_details``. A unique reading still
+reports missing required fields and unmapped legal extensions separately:
+
+.. doctest::
+
+   >>> source = ':20:EXAMPLE\n:61:260102C1,00NTRFREF\n:86:105?00Text?20Purpose?38X'
+   >>> reported = mt940.parse(
+   ...     source, options=mt940.Options(detail_candidates=True)
+   ... )[0].data
+   >>> [issue['kind'] for issue in reported['detail_issues']]
+   ['unknown_extension']
+   >>> reported['detail_issues'][0]['code']
+   '38'
+
+The analyzer never reorders source lines to complete a statement. Use
+:mod:`mt940.details` directly for the readings, marker classifications and
+raw lines before choosing how to store an ambiguous transaction.
+
 There are fewer transactions or balances than expected
 ------------------------------------------------------
 

@@ -52,6 +52,7 @@ options: !!python/object/new:mt940.options.Options
   - false
   - false
   - false
+  - false
 tags:
   13: !!python/object:mt940.tags.DateTimeIndication
     re: !!python/object/apply:re._compile

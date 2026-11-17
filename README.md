@@ -84,9 +84,9 @@ Custom tag instances and ordered pre/post processors can adapt a collection.
 variants. Processor overrides replace a whole slot. Copy its default list
 when adding a callback.
 
-Ten `mt940.Options` switches preserve legacy output unless enabled. All default
-to `False`. `mt940.Options(reversal_sign=True)` changes the sign of `RC`
-transactions, and `mt940.Options.all()` enables every declared switch.
+Eleven `mt940.Options` switches preserve legacy output unless enabled. All
+default to `False`. `mt940.Options(reversal_sign=True)` changes the sign of
+`RC` transactions, and `mt940.Options.all()` enables every declared switch.
 The [Options reference](https://mt940.readthedocs.io/en/latest/mt940.options.html)
 documents each effect. Compare outputs for your bank before changing options.
 

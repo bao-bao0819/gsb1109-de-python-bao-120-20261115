@@ -12,6 +12,7 @@ options: !!python/object/new:mt940.options.Options
   - true
   - true
   - true
+  - true
 tags:
   13: !!python/object:mt940.tags.DateTimeIndication
     re: !!python/object/apply:re._compile
@@ -119,6 +120,12 @@ transactions:
     - !!binary |
       B+ILGg==
     debitor_identifier: null
+    detail_issues:
+    - code: 08
+      field_name: null
+      kind: unknown_extension
+      line_number: 1
+      message: marker ?08 on line 1 is an unmapped legal extension
     deviate_applicant: null
     deviate_recipient: null
     end_to_end_reference: null

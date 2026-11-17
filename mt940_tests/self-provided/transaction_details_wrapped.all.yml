@@ -34,6 +34,7 @@ options: !!python/object/new:mt940.options.Options
   - true
   - true
   - true
+  - true
 tags:
   13: !!python/object:mt940.tags.DateTimeIndication
     re: !!python/object/apply:re._compile
@@ -135,6 +136,12 @@ transactions:
     date: !!python/object/apply:mt940.models.Date
     - !!binary |
       B+ACHQ==
+    detail_issues:
+    - code: '11'
+      field_name: null
+      kind: unknown_extension
+      line_number: 1
+      message: marker ?11 on line 1 is an unmapped legal extension
     entry_date: &id003 !!python/object/apply:mt940.models.Date
     - !!binary |
       B+ADAQ==

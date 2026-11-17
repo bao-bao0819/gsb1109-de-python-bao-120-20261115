@@ -34,6 +34,7 @@ options: !!python/object/new:mt940.options.Options
   - true
   - true
   - true
+  - true
 tags:
   13: !!python/object:mt940.tags.DateTimeIndication
     re: !!python/object/apply:re._compile
@@ -121,20 +122,45 @@ transaction_boundary: !!python/object/apply:builtins.frozenset
 transactions:
 - !!python/object:mt940.models.Transaction
   data:
-    additional_purpose: null
     amount: !!python/object:mt940.models.Amount
       amount: !!python/object/apply:decimal.Decimal
       - '27.00'
       currency: EUR
-    applicant_bin: '50070010'
-    applicant_iban: '0175526300'
-    applicant_name: PAYPAL
     bank_reference: 32-P1-TCS49518
     currency: EUR
     customer_reference: 100323-03-100323
     date: !!python/object/apply:mt940.models.Date
     - !!binary |
       B9oDEw==
+    detail_candidates:
+    - ? ''
+      : '051'
+      '00': Bank Transfer Credit
+      '10': '930226'
+      '20': QQW53T2245ZGY46J ABBUCHUNG
+      '21': VOM PAYPAL-KONTO
+      '22': 100318P3TX1433EV
+      '30': '50070010'
+      '31': '0175526300'
+      '32': PAYPAL
+      '34': '000'
+    - ? ''
+      : '051'
+      '00': Bank Transfer Credit
+      '10': '930226'
+      '20': QQW53T2245ZGY46J ABBUCHUNG
+      '21': VOM PAYPAL-KONTO
+      '22': 100318P3TX1433EV
+      '30': '50070010'
+      '31': 0175526300?32PAYPAL
+      '34': '000'
+    detail_issues:
+    - code: null
+      field_name: null
+      kind: ambiguous_structure
+      line_number: null
+      message: marker-shaped continuation lines admit more than one grammar-consistent
+        reading
     entry_date: &id003 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9oDEw==
@@ -142,13 +168,12 @@ transactions:
     funds_code: R
     guessed_entry_date: *id003
     id: NTRF
-    posting_text: Bank Transfer Credit
-    prima_nota: '930226'
-    purpose: QQW53T2245ZGY46J ABBUCHUNGVOM PAYPAL-KONTO100318P3TX1433EV
-    recipient_name: null
-    return_debit_notes: '000'
     status: C
-    transaction_code: '051'
+    transaction_details: '051?00Bank Transfer Credit?10930226?20QQW53T2245ZGY46J ABBUCH
+
+      UNG?21VOM PAYPAL-KONTO?22100318P3TX1433EV?3050070010?310175526300
+
+      ?32PAYPAL?34000'
     transaction_reference: "STAR1\xDCT\xDFUMS"
   transactions: *id004
 - !!python/object:mt940.models.Transaction

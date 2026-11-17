@@ -542,7 +542,8 @@ class Transactions(Sequence[Transaction]):
         data: Statement fields keyed by tag output names. Later statement
             values replace earlier ones, including balances and references.
         transactions: Mutable ordered list of :class:`Transaction` instances.
-        options: Immutable parser switches. Omitted options disable all ten.
+        options: Immutable parser switches. Omitted options disable all
+            eleven.
         tags: Per-collection mapping from tag ID to parser instance. The
             mapping is copied, but tag instances are shared with its source.
         processors: Per-collection mapping of slot name to ordered callable
@@ -659,7 +660,8 @@ class Transactions(Sequence[Transaction]):
                 blocks. A string is treated as one slug. Other iterables are
                 consumed once into a ``frozenset``. Omitted or empty selects no
                 extra boundaries.
-            options: Parser switches. Omitted or ``None`` disables all ten
+            options: Parser switches. Omitted or ``None`` disables all
+                eleven.
                 fields.
 
         No tags or processors run until :meth:`parse` is called.

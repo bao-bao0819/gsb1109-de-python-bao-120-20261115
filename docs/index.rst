@@ -26,7 +26,7 @@ Read bank statement text into transactions, decimal amounts, dates and balances.
       .. rubric:: Adapt a bank export
 
       :doc:`customising` builds isolated tag overrides and ordered processors.
-      :doc:`compatibility` explains all ten opt-in switches.
+      :doc:`compatibility` explains all eleven opt-in switches.
 
    .. container:: guide-card
 

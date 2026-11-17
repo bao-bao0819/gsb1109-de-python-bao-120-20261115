@@ -1,6 +1,6 @@
 """Immutable switches for parser behaviour changes.
 
-All ten :class:`Options` fields default to ``False``. The switches preserve
+All eleven :class:`Options` fields default to ``False``. The switches preserve
 legacy output for affected fields unless explicitly enabled. Pass an instance
 to :func:`mt940.parse`, :func:`mt940.parse_statements` or
 :class:`mt940.models.Transactions`. :meth:`Options.all` enables every currently
@@ -22,7 +22,7 @@ import dataclasses
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Options:
-    """Frozen, slotted configuration for ten opt-in parser behaviours.
+    """Frozen, slotted configuration for eleven opt-in parser behaviours.
 
     Each constructor keyword is a boolean field described below. Omitted fields
     remain ``False``. Instances can be shared between collections because
@@ -82,6 +82,17 @@ class Options:
     #: dropped.
     gvc_leading_text: bool = False
 
+    #: Analyze structured ``:86:`` details with their physical lines instead
+    #: of flattening them first. A marker-shaped continuation after a full
+    #: 65-character line is then treated as potential text rather than a
+    #: certain subfield marker. A single grammar-consistent reading is stored
+    #: exactly as before; competing readings keep the raw lines under
+    #: ``transaction_details`` and add ``detail_candidates`` and
+    #: ``detail_issues`` instead of forcing one split. Missing required
+    #: fields and unmapped legal extensions are reported in
+    #: ``detail_issues`` without reordering the source.
+    detail_candidates: bool = False
+
     @classmethod
     def all(cls) -> Options:
         """Construct an instance with every declared field set to ``True``.
@@ -92,7 +103,7 @@ class Options:
 
         Returns:
             An instance of the called class. For ``Options`` this enables all
-            ten switches.
+            eleven switches.
 
         Raises:
             TypeError: The constructor rejects a field keyword, for example

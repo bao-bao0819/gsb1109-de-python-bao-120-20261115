@@ -35,6 +35,7 @@ options: !!python/object/new:mt940.options.Options
   - true
   - true
   - true
+  - true
 tags:
   13: !!python/object:mt940.tags.DateTimeIndication
     re: !!python/object/apply:re._compile
@@ -409,6 +410,12 @@ transactions:
     date: !!python/object/apply:mt940.models.Date
     - !!binary |
       B9MKFA==
+    detail_issues:
+    - code: '38'
+      field_name: null
+      kind: unknown_extension
+      line_number: 6
+      message: marker ?38 on line 6 is an unmapped legal extension
     entry_date: &id006 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9MKFA==
@@ -443,6 +450,12 @@ transactions:
     date: !!python/object/apply:mt940.models.Date
     - !!binary |
       B9MKFA==
+    detail_issues:
+    - code: '38'
+      field_name: null
+      kind: unknown_extension
+      line_number: 5
+      message: marker ?38 on line 5 is an unmapped legal extension
     entry_date: &id007 !!python/object/apply:mt940.models.Date
     - !!binary |
       B9MKFA==

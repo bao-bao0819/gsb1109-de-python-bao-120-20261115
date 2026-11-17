@@ -25,6 +25,7 @@ options: !!python/object/new:mt940.options.Options
   - true
   - true
   - true
+  - true
 tags:
   13: !!python/object:mt940.tags.DateTimeIndication
     re: !!python/object/apply:re._compile
@@ -132,6 +133,12 @@ transactions:
     - !!binary |
       B+EJDg==
     debitor_identifier: null
+    detail_issues:
+    - code: null
+      field_name: posting_text
+      kind: missing_required
+      line_number: null
+      message: 'structured :86: is missing required field ''posting_text'''
     deviate_applicant: null
     deviate_recipient: null
     end_to_end_reference: ' 1234567890123 PAYPAL'

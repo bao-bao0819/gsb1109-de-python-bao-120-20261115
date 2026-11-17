@@ -2,7 +2,7 @@ Choose compatibility options
 ============================
 
 Some parsing corrections change the output of previously accepted input.
-:class:`mt940.Options` keeps all ten switches ``False`` by default. Choose
+:class:`mt940.Options` keeps all eleven switches ``False`` by default. Choose
 individual switches after comparing your source files, or use
 :meth:`mt940.options.Options.all` to enable every declared field.
 
@@ -24,8 +24,8 @@ makes it negative. ``Options.all()`` includes that switch, so the amount agrees
 in this example. Agreement for one input does not establish that the other
 switches have no effect on your bank's exports.
 
-All ten switches
-----------------
+All eleven switches
+-------------------
 
 .. list-table:: Defaults and enabled effects
    :header-rows: 1
@@ -79,6 +79,14 @@ All ten switches
        terminator and discard early text.
      - Disables that early terminator interpretation. Free text before a
        genuine GVC keyword is still discarded.
+   * - ``detail_candidates``
+     - Physical lines of a structured ``:86:`` are flattened before marker
+       detection, so a marker-shaped continuation is always a marker.
+     - Keeps the physical lines and compares every grammar-consistent
+       reading. A unique reading is stored as before. Competing readings keep
+       the raw lines in ``transaction_details`` and add
+       ``detail_candidates`` plus ``detail_issues``. Missing required fields
+       and unknown legal extensions are reported without reordering lines.
 
 Configuration is immutable
 --------------------------
@@ -95,7 +103,7 @@ and use ``dataclasses.replace`` when a copy needs one changed field:
    >>> selected.case_insensitive_marks, extended.case_insensitive_marks
    (False, True)
    >>> len(mt940.Options.names())
-   10
+   11
    >>> all(getattr(mt940.Options.all(), name) for name in mt940.Options.names())
    True
 
