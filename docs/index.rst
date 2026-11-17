@@ -31,6 +31,38 @@ Google:
   es  = events(<Google Calendar URL>)
 
 
+Business day coverage
+---------------------
+
+To count how many business days each activity actually covers, build the
+venue's business windows from its open dates, opening/closing times and
+timezone, and intersect them with the expanded events:
+
+.. code:: python
+
+  from datetime import date, time
+  from icalevents.coverage import business_calendar, coverage_by_uid
+  from icalevents.icalevents import events
+
+  es = events(file="venue.ics", start=date(2024, 1, 1), end=date(2024, 2, 1))
+  windows = business_calendar(
+      business_days=[date(2024, 1, 1), date(2024, 1, 2)],
+      open_time=time(9, 0),
+      close_time=time(18, 0),
+      tz="Europe/Berlin",
+  )
+  # UID -> number of distinct business days covered
+  print(coverage_by_uid(es, windows))
+
+A closing time at or before the opening time is treated as a window that runs
+past midnight. A day is counted only when an event really overlaps that day's
+window; overlapping instances of the same event (same UID) count the day once.
+Cancelled events (``STATUS:CANCELLED``) never count and transparent events
+(``TRANSP:TRANSPARENT``) are skipped unless ``include_transparent=True``.
+The one-shot helper :func:`icalevents.coverage.event_coverage` takes the iCal
+source directly and returns the same UID to day-count mapping.
+
+
 Example
 =======
 
@@ -115,6 +147,14 @@ icalevents.icalparser module
 ----------------------------
 
 .. automodule:: icalevents.icalparser
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+icalevents.coverage module
+--------------------------
+
+.. automodule:: icalevents.coverage
    :members:
    :undoc-members:
    :show-inheritance:
