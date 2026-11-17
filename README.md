@@ -43,3 +43,36 @@ pre-commit install
 ```
 
 Happy contributing!
+
+### Incremental window updates
+
+`diff_calendars` compares two snapshots and rebuilds only instances inside one
+query window.  It separates recurrence-rule changes, timezone-definition
+changes, single-occurrence exceptions and display-only edits:
+
+```python
+from datetime import date
+
+from icalevents.icaldiff import diff_calendars
+
+result = diff_calendars(
+    previous_ics,
+    current_ics,
+    start=date(2024, 1, 1),
+    end=date(2024, 1, 31),
+)
+
+result.added                      # new instances
+result.removed                    # withdrawn instances
+result.attribute_changes          # summary/location/... only, no remove+add
+result.structural_changes         # time, rule, or timezone changes
+result.cancellation_changes       # STATUS:CANCELLED with before/after events
+result.series_changes             # RRULE/EXDATE/DTSTART-level changes
+result.timezone_changes           # VTIMEZONE definition changes
+result.apply(existing_events)     # apply the diff to a local window
+```
+
+An instance is identified by `(UID, original occurrence)`.  Moving an
+exception keeps its identity because the original `RECURRENCE-ID` remains the
+anchor.  Instances outside the window are never used as evidence for deleting
+confirmed instances inside it; such rows are returned in `result.protected`.

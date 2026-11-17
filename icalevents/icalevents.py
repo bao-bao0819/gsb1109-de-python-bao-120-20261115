@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, tzinfo as _tzinfo
+from datetime import date, datetime, time, tzinfo as _tzinfo
 from pathlib import Path
 from threading import Lock, Thread
 
 import urllib3
 
+from .icaldiff import InstanceKey, diff_events
 from .icalparser import Event, parse_events
 from .icaldownload import ICalDownload
 
@@ -102,7 +103,7 @@ def request_data(
             fix_apple=fix_apple,
         )
     finally:
-        update_events(key, data)
+        update_events(key, data, start=start, end=end)
         request_finished(key)
 
 
@@ -154,15 +155,84 @@ def request_finished(key: str) -> None:
             threads[key][0].run()
 
 
-def update_events(key: str, data: list[Event]) -> None:
+def update_events(
+    key: str,
+    data: list[Event],
+    start: date | datetime | None = None,
+    end: date | datetime | None = None,
+) -> None:
     """
-    Set the latest events for a key.
+    Set the latest events for a key, rebuilding only the requested window.
+
+    When a window is supplied, instances inside it are replaced by ``data``;
+    instances outside it are retained.  Confirmed rows inside the window are
+    retained when the new result is visibly partial (for example a feed that
+    only returned one day).  Without a window this keeps its historical
+    replacement semantics.
 
     :param key: key to set
     :param data: events for key
+    :param start: optional start of the rebuilt window
+    :param end: optional end of the rebuilt window
     """
     with event_lock:
-        event_store[key] = data
+        if start is None or end is None or key not in event_store:
+            event_store[key] = data
+            return
+
+        inside = [
+            event
+            for event in event_store[key]
+            if _inside_window(event, start, end)
+        ]
+        outside = [
+            event
+            for event in event_store[key]
+            if not _inside_window(event, start, end)
+        ]
+
+        # An empty result is almost always a failed or partial download.  Keep
+        # the previously confirmed window rather than erasing it.
+        if not data:
+            event_store[key] = outside + inside
+            return
+
+        diff = diff_events(inside, data, start=start, end=end)
+        event_store[key] = outside + diff.apply(inside)
+
+
+def _inside_window(
+    event: Event, start: date | datetime, end: date | datetime
+) -> bool:
+    """Whether an event overlaps a window, using parse_events semantics."""
+    if event.start is None or event.end is None:
+        return False
+    low, high = _window_bounds(event.start, start, end)
+    return event.end >= low and event.start <= high
+
+
+def _window_bounds(
+    like: date | datetime, start: date | datetime, end: date | datetime
+) -> tuple[date | datetime, date | datetime]:
+    if type(like) is date:
+        return (
+            date(start.year, start.month, start.day),
+            date(end.year, end.month, end.day),
+        )
+    if type(start) is date:
+        low = datetime.combine(start, time.min)
+    else:
+        low = start
+    if type(end) is date:
+        high = datetime.combine(end, time.max)
+    else:
+        high = end
+    if like.tzinfo is not None:
+        if low.tzinfo is None:
+            low = low.replace(tzinfo=like.tzinfo)
+        if high.tzinfo is None:
+            high = high.replace(tzinfo=like.tzinfo)
+    return low, high
 
 
 def latest_events(key: str) -> list[Event]:

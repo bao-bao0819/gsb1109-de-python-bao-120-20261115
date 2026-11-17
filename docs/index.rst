@@ -118,3 +118,25 @@ icalevents.icalparser module
    :members:
    :undoc-members:
    :show-inheritance:
+
+Incremental window updates
+--------------------------
+
+.. code:: python
+
+  from datetime import date
+  from icalevents.icaldiff import diff_calendars
+
+  result = diff_calendars(old_ics, new_ics, date(2024, 1, 1), date(2024, 1, 31))
+
+  result.added                 # instances to insert
+  result.removed               # instances to withdraw
+  result.changed               # in-place updates
+  result.cancelled             # STATUS:CANCELLED changes (also in removed)
+  result.series_changes        # RRULE / EXDATE / DTSTART changes
+  result.timezone_changes      # VTIMEZONE definition changes
+  result.protected             # unproven removals that were retained
+
+Only instances overlapping the requested window are compared.  Identity is the
+pair ``(UID, original occurrence)``; an exception moved to another day keeps
+the same key because its original ``RECURRENCE-ID`` is retained.

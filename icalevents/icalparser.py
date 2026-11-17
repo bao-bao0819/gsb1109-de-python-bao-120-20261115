@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, tzinfo as _tzinfo
 from importlib.metadata import version
 from random import randint
 from typing import cast
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid5
 
 from dateutil.rrule import rruleset, rrulestr
 from dateutil.tz import UTC, gettz
@@ -70,12 +70,16 @@ class Event:
         self.last_modified: datetime | None = None
         self.sequence: str | None = None
         self.recurrence_id: datetime | date | None = None
+        # Original position of an occurrence.  This is deliberately kept in the
+        # calendar's local time and never changes when an exception is moved.
+        self.occurrence_start: datetime | date | None = None
         self.attendee: Attendee | list[Attendee] | None = None
         self.organizer: str | None = None
         self.categories: list[str | None] = []
         self.floating: bool = False
         self.status: str | None = None
         self.url: str | None = None
+        self.tzid: str | None = None
         self.component: Component | None = None
 
     def time_left(self, time: datetime | None = None) -> timedelta:
@@ -145,6 +149,7 @@ class Event:
         ne.summary = self.summary
         ne.description = self.description
         ne.start = new_start
+        ne.occurrence_start = self.occurrence_start
 
         if self.end:
             duration = self.end - self.start
@@ -160,10 +165,12 @@ class Event:
         ne.uid = uid
         ne.created = self.created
         ne.last_modified = self.last_modified
+        ne.recurrence_id = self.recurrence_id
         ne.categories = self.categories
         ne.floating = self.floating
         ne.status = self.status
         ne.url = self.url
+        ne.tzid = self.tzid
 
         return ne
 
@@ -175,6 +182,32 @@ def encode(value: vText | None) -> str | None:
         return str(value)
     except UnicodeEncodeError:
         return str(value.encode("utf-8"))
+
+
+def component_uid(component: Component) -> str:
+    """
+    Return the UID used for an event component.
+
+    A UID is mandatory in RFC 5545.  Use it verbatim when present, including
+    non-ASCII values, so that editing a display field does not change identity.
+    Some producers omit the UID entirely; for those, derive a stable identity
+    from the event's time slot rather than generating a random one on every
+    parse.  Otherwise an unchanged event would look removed and re-added after
+    each download.
+    """
+    value = component.get("uid")
+    if value is not None:
+        try:
+            return value.encode("utf-8").decode("ascii")
+        except UnicodeDecodeError:
+            return str(value)
+
+    parts = [component.name]
+    for name in ("dtstart", "dtend", "duration", "recurrence-id"):
+        item = component.get(name)
+        if item is not None:
+            parts.append(name.upper() + "=" + str(getattr(item, "dt", item)))
+    return str(uuid5(NAMESPACE_URL, "icalevents:" + "\x1e".join(parts)))
 
 
 def create_event(component: Component, strict: bool) -> Event:
@@ -190,7 +223,10 @@ def create_event(component: Component, strict: bool) -> Event:
 
     event.component = component
 
-    event.start = component.get("dtstart").dt
+    dtstart_prop = component.get("dtstart")
+    event.start = dtstart_prop.dt
+    if dtstart_prop.params.get("TZID"):
+        event.tzid = str(dtstart_prop.params["TZID"])
     # The RFC specifies that the TZID parameter must be specified for datetime or time
     # Otherwise we set a default timezone (if only one is set with VTIMEZONE) or utc
     if not strict:
@@ -225,10 +261,7 @@ def create_event(component: Component, strict: bool) -> Event:
         elif attendees:
             event.attendee = Attendee(attendees)
 
-    try:
-        event.uid = component.get("uid").encode("utf-8").decode("ascii")
-    except (AttributeError, UnicodeDecodeError):
-        event.uid = str(uuid4())  # Be nice - treat every event as unique
+    event.uid = component_uid(component)
 
     if component.get("organizer"):
         event.organizer = component.get("organizer").encode("utf-8").decode("ascii")
@@ -253,6 +286,9 @@ def create_event(component: Component, strict: bool) -> Event:
             event.recurrence_id = date(year=rid.year, month=rid.month, day=rid.day)
         else:
             event.recurrence_id = rid
+        event.occurrence_start = event.recurrence_id
+    else:
+        event.occurrence_start = event.start
 
     if component.get("last-modified"):
         event.last_modified = component.get("last-modified").dt
@@ -430,14 +466,12 @@ def parse_events(
                     # recurrence has crossed over the daylight savings time boundary.
                     if is_not_exception(dt):
                         if type(dt) is datetime and dt.tzinfo:
-                            ecopy = e.copy_to(
-                                dt.replace(tzinfo=get_timezone(str(dt.tzinfo))),
-                                e.uid,
-                            )
+                            occurrence = dt.replace(tzinfo=get_timezone(str(dt.tzinfo)))
+                            ecopy = e.copy_to(occurrence, e.uid)
                         else:
-                            ecopy = e.copy_to(
-                                dt.date() if type(e.start) is date else dt, e.uid
-                            )
+                            occurrence = dt.date() if type(e.start) is date else dt
+                            ecopy = e.copy_to(occurrence, e.uid)
+                        ecopy.occurrence_start = occurrence
                         found.append(ecopy)
 
             elif e.end >= f and e.start <= t and is_not_exception(e.start):
